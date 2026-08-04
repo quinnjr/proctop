@@ -196,7 +196,10 @@ impl<'de> Deserialize<'de> for Spec {
 
 fn parse_color(text: &str) -> Option<Color> {
     if let Some(hex) = text.strip_prefix('#') {
-        if hex.len() != 6 {
+        // Both checks matter: `len` counts bytes, and the slices below are
+        // at byte offsets, so a six-byte string of multibyte characters
+        // ("#aébcd") would pass the length guard and then split mid-char.
+        if hex.len() != 6 || !hex.is_ascii() {
             return None;
         }
         let byte = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();

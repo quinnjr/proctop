@@ -50,6 +50,38 @@ fn scales_to_the_largest_unit_that_stays_under_four_digits() {
 }
 
 #[test]
+fn advances_a_unit_before_the_rounded_value_reaches_four_digits() {
+    // The loop advances at >= 1024, but `{:.0}` rounds — so a value in
+    // 1023.5..1024.0 printed four digits in the smaller unit.
+    assert_eq!(bytes(1_048_575), "1.0M");
+    assert_eq!(bytes(1_073_741_823), "1.0G");
+}
+
+#[test]
+fn keeps_scaling_past_terabytes() {
+    // The unit table stopped at T, so a petabyte-scale figure printed eight
+    // digits. Out of reach of a process's RSS, but the claim is about the
+    // function, not about /proc.
+    assert_eq!(bytes(1024u64.pow(5)), "1.0P");
+    assert_eq!(bytes(1024u64.pow(6)), "1.0E");
+}
+
+#[test]
+fn never_prints_more_than_four_digits_of_value() {
+    for shift in 0..64 {
+        let n = 1u64 << shift;
+        for candidate in [n, n.saturating_sub(1), n.saturating_add(1), u64::MAX] {
+            let rendered = bytes(candidate);
+            let digits = rendered.chars().filter(char::is_ascii_digit).count();
+            assert!(
+                digits <= 4,
+                "bytes({candidate}) = {rendered:?} has {digits} digits"
+            );
+        }
+    }
+}
+
+#[test]
 fn drops_the_decimal_once_it_stops_adding_information() {
     // Column width is scarce. Below 10 the decimal distinguishes 1.2 from
     // 1.9; above it, "128M" says as much as "128.4M" in one fewer cell.

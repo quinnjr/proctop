@@ -76,3 +76,62 @@ fn reads_back_the_nice_value_it_set() {
 
     assert_eq!(actions::nice_of(me).unwrap(), before + 1);
 }
+
+// ---------- identity-checked actions ----------
+
+use rtop::sample::process::parse_pid_stat;
+
+/// This process's own start time, as `/proc` reports it.
+fn my_starttime() -> u64 {
+    let me = std::process::id();
+    let text = std::fs::read_to_string(format!("/proc/{me}/stat")).unwrap();
+    parse_pid_stat(&text, 4096).unwrap().starttime
+}
+
+#[test]
+fn signals_a_process_whose_identity_still_matches() {
+    let me = std::process::id() as i32;
+
+    // Signal 0 delivers nothing; this is the permission-and-existence path.
+    assert!(actions::kill_if_unchanged(me, my_starttime(), Signal::Cont).is_ok());
+}
+
+#[test]
+fn refuses_to_signal_a_pid_whose_start_time_has_changed() {
+    // Linux recycles PIDs. A kill dialog can sit open while its process
+    // exits and its number is reused, and signalling the stranger that
+    // inherited it is the worst possible outcome of pressing Enter.
+    let me = std::process::id() as i32;
+
+    let err = actions::kill_if_unchanged(me, my_starttime() + 1, Signal::Kill)
+        .expect_err("must not signal a different process");
+
+    assert!(err.to_string().contains("exited"), "unhelpful: {err}");
+}
+
+#[test]
+fn refuses_to_renice_a_pid_whose_start_time_has_changed() {
+    let me = std::process::id() as i32;
+
+    let err = actions::renice_if_unchanged(me, my_starttime() + 1, 5)
+        .expect_err("must not renice a different process");
+
+    assert!(err.to_string().contains("exited"), "unhelpful: {err}");
+}
+
+#[test]
+fn reports_an_exited_process_rather_than_a_raw_errno() {
+    let result = actions::kill_if_unchanged(0x3FFF_FFFF, 1, Signal::Term);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn renices_a_process_whose_identity_still_matches() {
+    let me = std::process::id() as i32;
+    let before = actions::nice_of(me).unwrap();
+
+    actions::renice_if_unchanged(me, my_starttime(), before + 1).expect("raising is unprivileged");
+
+    assert_eq!(actions::nice_of(me).unwrap(), before + 1);
+}

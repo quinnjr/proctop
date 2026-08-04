@@ -1,6 +1,7 @@
 //! The root component: owns the sampling loop, the UI state, and the wiring
 //! between the keymap's decisions and the world.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -59,17 +60,31 @@ impl Component for App {
         let sampler = hooks.use_state(|| Arc::new(Mutex::new(Sampler::new())));
 
         // Sensors are only read while their tab is showing; see
-        // `Sampler::sensors` for why. Keyed on the tab so switching to it
-        // restarts the loop and the readings appear on the next tick rather
-        // than at the next refresh.
-        let showing_sensors = ui.get().tab == Tab::Sensors;
+        // `Sampler::sensors` for why.
+        //
+        // The flag is a shared atomic rather than a dependency of the
+        // sampling task. Keying the task on the tab restarted the loop on
+        // every switch, and restarting it is not free: the in-flight
+        // `spawn_blocking` is abandoned at its await point (the /proc work
+        // still runs, its result is dropped, and the next sample's rates
+        // then cover a doubled interval), while the fresh loop samples
+        // immediately — so holding Tab down sampled far faster than
+        // `refresh_ms`. Whether to read sensors is a parameter of a sample,
+        // not a reason to tear the loop down.
+        let sensors_wanted = hooks.use_state(|| Arc::new(AtomicBool::new(false)));
+        // Written, not `set`: this must not itself schedule a render.
+        sensors_wanted
+            .get()
+            .store(ui.get().tab == Tab::Sensors, Ordering::Relaxed);
+
         {
-            let (sink, sampler) = (sample.clone(), sampler.get());
+            let (sink, sampler, wanted) = (sample.clone(), sampler.get(), sensors_wanted.get());
             let refresh = Duration::from_millis(props.config.refresh_ms);
-            hooks.use_task(showing_sensors, move || async move {
+            hooks.use_future(move || async move {
                 loop {
                     let sink = sink.clone();
                     let sampler = sampler.clone();
+                    let wanted = wanted.clone();
                     // /proc reads are blocking syscalls across hundreds of
                     // files; on the render thread they would stall input for
                     // the duration of every sample.
@@ -77,7 +92,7 @@ impl Component for App {
                         sampler
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .sample(showing_sensors)
+                            .sample(wanted.load(Ordering::Relaxed))
                     })
                     .await;
                     if let Ok(taken) = taken {
@@ -92,7 +107,11 @@ impl Component for App {
         let state = ui.get();
         let palette = props.palette;
 
-        let header_rows = meters::height(current.cores.len(), terminal_cols);
+        // Clamped so the tab bar and status bar are never pushed off the
+        // bottom: on a very short terminal the header gives up rows rather
+        // than the chrome that tells the user where they are.
+        let header_rows = meters::height(current.cores.len(), terminal_cols)
+            .min(terminal_rows.saturating_sub(CHROME_ROWS + 1));
         let body_rows = terminal_rows
             .saturating_sub(header_rows)
             .saturating_sub(CHROME_ROWS);
@@ -103,7 +122,22 @@ impl Component for App {
         // screen, since the table's flex_grow lets it take the space.
         let table_rows = body_rows.saturating_sub(1);
 
-        let rows = Shared::new(visible_rows(&current, &state));
+        // Memoized on what the list actually depends on. Without this the
+        // whole process list is cloned, filtered and sorted on *every*
+        // render — including a keystroke that moves the cursor one row, or
+        // one that is not bound to anything. It also keeps the `Shared`
+        // stable across those renders, so the table's props compare equal
+        // and its subtree is skipped entirely.
+        let rows = hooks.use_memo(
+            (
+                current.clone(),
+                state.filter.clone(),
+                state.sort,
+                state.descending,
+                state.tree_view,
+            ),
+            || Shared::new(visible_rows(&current, &state)),
+        );
 
         // Processes exit between samples, so a cursor that was valid a
         // moment ago can now point past the end of the list.
@@ -123,17 +157,30 @@ impl Component for App {
                     Effect::Quit => app.exit(),
                     // Signals and renices are performed here rather than in
                     // the keymap so that the keymap stays a pure function.
-                    Effect::Kill { pid, signal } => {
-                        next.notice = Some(match actions::kill(pid, signal) {
-                            Ok(()) => format!("sent {} to {pid}", signal.label()),
-                            Err(e) => format!("{} to {pid}: {e}", signal.label()),
-                        });
+                    // Both re-check identity first: the dialog may have been
+                    // open long enough for the process to exit and its pid
+                    // to be recycled.
+                    Effect::Kill {
+                        pid,
+                        starttime,
+                        signal,
+                    } => {
+                        next.notice =
+                            Some(match actions::kill_if_unchanged(pid, starttime, signal) {
+                                Ok(()) => format!("sent {} to {pid}", signal.label()),
+                                Err(e) => format!("{} to {pid}: {e}", signal.label()),
+                            });
                     }
-                    Effect::Renice { pid, nice } => {
-                        next.notice = Some(match actions::renice(pid, nice) {
-                            Ok(()) => format!("reniced {pid} to {nice}"),
-                            Err(e) => format!("renice {pid}: {e}"),
-                        });
+                    Effect::Renice {
+                        pid,
+                        starttime,
+                        nice,
+                    } => {
+                        next.notice =
+                            Some(match actions::renice_if_unchanged(pid, starttime, nice) {
+                                Ok(()) => format!("reniced {pid} to {nice}"),
+                                Err(e) => format!("renice {pid}: {e}"),
+                            });
                     }
                 }
                 ui.set(next);
@@ -200,26 +247,33 @@ fn overlay_element(state: &UiState, procs: &[ProcRow], palette: &Palette) -> Opt
     match &state.overlay {
         Overlay::None => None,
         Overlay::Help => Some(element!(Help(palette: *palette))),
-        Overlay::Detail { pid } => Some(element!(Detail(
-            // Looked up fresh each frame so the pane keeps updating, and
-            // says so rather than freezing if the process exits.
-            row: procs.iter().find(|r| r.proc.pid == *pid).cloned(),
-            pid: *pid,
+        // All three look the row up fresh each frame, so a pane keeps
+        // updating and reports the exit rather than freezing on stale text.
+        Overlay::Detail { key } => Some(element!(Detail(
+            row: find(procs, *key),
+            pid: key.pid,
             palette: *palette,
         ))),
-        Overlay::Kill { pid, name, index } => Some(element!(Kill(
-            pid: *pid,
+        Overlay::Kill { key, name, index } => Some(element!(Kill(
+            pid: key.pid,
             name: name.clone(),
             index: *index,
+            alive: find(procs, *key).is_some(),
             palette: *palette,
         ))),
-        Overlay::Renice { pid, name, input } => Some(element!(Renice(
-            pid: *pid,
+        Overlay::Renice { key, name, input } => Some(element!(Renice(
+            pid: key.pid,
             name: name.clone(),
             input: input.clone(),
+            alive: find(procs, *key).is_some(),
             palette: *palette,
         ))),
     }
+}
+
+/// The row for a process identity, if it is still in the sample.
+fn find(procs: &[ProcRow], key: crate::model::ProcKey) -> Option<ProcRow> {
+    procs.iter().find(|r| r.proc.key() == key).cloned()
 }
 
 fn tab_bar(state: &UiState, palette: &Palette) -> Element {

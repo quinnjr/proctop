@@ -18,7 +18,7 @@ struct Cli {
     #[arg(short, long, value_name = "MS")]
     refresh: Option<u64>,
 
-    /// Column to sort by: pid, name, cpu, mem, time.
+    /// Column to sort by: pid, name/command, cpu, mem/memory/res, time.
     #[arg(short, long)]
     sort: Option<String>,
 
@@ -48,7 +48,11 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     if cli.show_config_path {
-        println!("{}", config::default_path().display());
+        // The path rtop would actually read, which `--config` overrides.
+        match &cli.config {
+            Some(path) => println!("{path}"),
+            None => println!("{}", config::default_path().display()),
+        }
         return ExitCode::SUCCESS;
     }
 
@@ -110,16 +114,10 @@ fn load_config(cli: &Cli) -> Result<Config, String> {
 }
 
 fn parse_sort(word: &str) -> Result<SortKey, String> {
-    Ok(match word {
-        "pid" => SortKey::Pid,
-        "name" | "command" => SortKey::Name,
-        "cpu" => SortKey::Cpu,
-        "mem" | "memory" | "res" => SortKey::Memory,
-        "time" => SortKey::Time,
-        other => {
-            return Err(format!(
-                "--sort expects one of pid, name, cpu, mem, time (got {other})"
-            ));
-        }
+    SortKey::from_word(word).ok_or_else(|| {
+        format!(
+            "--sort expects one of {} (got {word})",
+            SortKey::all_spellings()
+        )
     })
 }

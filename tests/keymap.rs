@@ -15,7 +15,7 @@ fn rows(n: usize) -> Vec<ProcRow> {
                 nice: 0,
                 ..Proc::default()
             },
-            user: if i % 2 == 0 { "root" } else { "joseph" }.to_string(),
+            user: if i % 2 == 0 { "root" } else { "joseph" }.into(),
             ..ProcRow::default()
         })
         .collect()
@@ -340,29 +340,70 @@ fn opens_the_detail_pane_for_the_selected_process() {
 
     press(&mut state, KeyCode::Enter);
 
-    assert_eq!(state.overlay, Overlay::Detail { pid: 101 });
+    assert!(matches!(&state.overlay, Overlay::Detail { key } if key.pid == 101));
 }
 
 // ---------- kill ----------
 
+/// Open the kill dialog the way a user does: the `dd` sequence.
+fn press_dd(state: &mut UiState) {
+    press(state, KeyCode::Char('d'));
+    press(state, KeyCode::Char('d'));
+}
+
 #[test]
-fn d_opens_a_kill_confirmation_rather_than_killing_immediately() {
+fn a_single_d_opens_nothing() {
+    // The binding is `dd`, vim's delete. One `d` is a prefix, not a command:
+    // a destructive action reachable from a single keystroke in a list the
+    // user is actively scrolling is exactly what the two-key sequence avoids.
     let mut state = UiState::default();
 
     let effect = press(&mut state, KeyCode::Char('d'));
 
-    assert_eq!(
-        effect,
-        Effect::None,
-        "nothing should die from one keystroke"
-    );
-    assert!(matches!(state.overlay, Overlay::Kill { pid: 100, .. }));
+    assert_eq!(effect, Effect::None);
+    assert_eq!(state.overlay, Overlay::None);
+}
+
+#[test]
+fn dd_opens_a_kill_confirmation_rather_than_killing_immediately() {
+    let mut state = UiState::default();
+
+    press_dd(&mut state);
+
+    assert!(matches!(&state.overlay, Overlay::Kill { key, .. } if key.pid == 100));
+}
+
+#[test]
+fn a_d_followed_by_anything_else_abandons_the_prefix() {
+    let mut state = UiState::default();
+
+    press(&mut state, KeyCode::Char('d'));
+    press(&mut state, KeyCode::Char('j'));
+
+    assert_eq!(state.overlay, Overlay::None, "j is not the second d");
+    assert_eq!(state.selection.index, 1, "and j still moves the cursor");
+
+    // The prefix must not survive the interruption.
+    press(&mut state, KeyCode::Char('d'));
+    assert_eq!(state.overlay, Overlay::None, "this d starts a fresh prefix");
+}
+
+#[test]
+fn the_kill_prefix_does_not_leak_into_search() {
+    let mut state = UiState::default();
+    press(&mut state, KeyCode::Char('d'));
+
+    press(&mut state, KeyCode::Char('/'));
+    type_str(&mut state, "d");
+
+    assert_eq!(state.filter.query, "d", "the d is typed, not a prefix");
+    assert_eq!(state.overlay, Overlay::None);
 }
 
 #[test]
 fn the_kill_dialog_defaults_to_the_signal_that_asks_politely() {
     let mut state = UiState::default();
-    press(&mut state, KeyCode::Char('d'));
+    press_dd(&mut state);
 
     let effect = press(&mut state, KeyCode::Enter);
 
@@ -370,6 +411,7 @@ fn the_kill_dialog_defaults_to_the_signal_that_asks_politely() {
         effect,
         Effect::Kill {
             pid: 100,
+            starttime: 0,
             signal: Signal::Term
         }
     );
@@ -378,7 +420,7 @@ fn the_kill_dialog_defaults_to_the_signal_that_asks_politely() {
 #[test]
 fn the_kill_dialog_picks_another_signal() {
     let mut state = UiState::default();
-    press(&mut state, KeyCode::Char('d'));
+    press_dd(&mut state);
 
     press(&mut state, KeyCode::Char('j'));
     let effect = press(&mut state, KeyCode::Enter);
@@ -387,6 +429,7 @@ fn the_kill_dialog_picks_another_signal() {
         effect,
         Effect::Kill {
             pid: 100,
+            starttime: 0,
             signal: Signal::Kill
         }
     );
@@ -395,7 +438,7 @@ fn the_kill_dialog_picks_another_signal() {
 #[test]
 fn escape_cancels_a_kill() {
     let mut state = UiState::default();
-    press(&mut state, KeyCode::Char('d'));
+    press_dd(&mut state);
 
     let effect = press(&mut state, KeyCode::Esc);
 
@@ -404,17 +447,19 @@ fn escape_cancels_a_kill() {
 }
 
 #[test]
-fn d_does_nothing_when_the_list_is_empty() {
+fn dd_does_nothing_when_the_list_is_empty() {
     let mut state = UiState::default();
 
-    let effect = handle_key(
-        &mut state,
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-        &[],
-        HEIGHT,
-    );
+    for _ in 0..2 {
+        let effect = handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+            &[],
+            HEIGHT,
+        );
+        assert_eq!(effect, Effect::None);
+    }
 
-    assert_eq!(effect, Effect::None);
     assert_eq!(state.overlay, Overlay::None);
 }
 
@@ -438,7 +483,14 @@ fn renice_accepts_a_value_in_range() {
 
     let effect = press(&mut state, KeyCode::Enter);
 
-    assert_eq!(effect, Effect::Renice { pid: 100, nice: 10 });
+    assert_eq!(
+        effect,
+        Effect::Renice {
+            pid: 100,
+            starttime: 0,
+            nice: 10
+        }
+    );
 }
 
 #[test]
@@ -462,4 +514,94 @@ fn renice_ignores_characters_a_nice_value_could_never_contain() {
     type_str(&mut state, "1a2");
 
     assert!(matches!(&state.overlay, Overlay::Renice { input, .. } if input == "12"));
+}
+
+// ---------- documented aliases ----------
+
+#[test]
+fn every_arrow_and_named_key_matches_its_vim_counterpart() {
+    // The README documents both spellings of each movement. Only the vim
+    // half was ever tested, so the arrow and named keys were free to drift.
+    for (vim, alias) in [
+        (KeyCode::Char('j'), KeyCode::Down),
+        (KeyCode::Char('k'), KeyCode::Up),
+        (KeyCode::Char('g'), KeyCode::Home),
+        (KeyCode::Char('G'), KeyCode::End),
+    ] {
+        let mut with_vim = UiState::default();
+        let mut with_alias = UiState::default();
+        // Start away from the ends so every key has somewhere to go.
+        for state in [&mut with_vim, &mut with_alias] {
+            press(state, KeyCode::Char('j'));
+            press(state, KeyCode::Char('j'));
+        }
+
+        press(&mut with_vim, vim);
+        press(&mut with_alias, alias);
+
+        assert_eq!(
+            with_vim.selection, with_alias.selection,
+            "{alias:?} should do what {vim:?} does"
+        );
+    }
+}
+
+#[test]
+fn page_keys_move_a_full_page_in_each_direction() {
+    let mut state = UiState::default();
+
+    press(&mut state, KeyCode::PageDown);
+    assert_eq!(state.selection.index, HEIGHT);
+
+    press(&mut state, KeyCode::PageUp);
+    assert_eq!(state.selection.index, 0);
+}
+
+#[test]
+fn control_u_moves_back_a_half_page() {
+    let mut state = UiState::default();
+    press(&mut state, KeyCode::Char('G'));
+    let bottom = state.selection.index;
+
+    press_ctrl(&mut state, KeyCode::Char('u'));
+
+    assert_eq!(state.selection.index, bottom - HEIGHT / 2);
+}
+
+#[test]
+fn shift_tab_walks_the_tabs_backwards() {
+    let mut state = UiState::default();
+
+    press(&mut state, KeyCode::BackTab);
+
+    assert_eq!(state.tab, Tab::Sensors, "wraps to the last tab");
+}
+
+#[test]
+fn q_closes_the_renice_dialog_the_way_it_closes_the_kill_dialog() {
+    let mut state = UiState::default();
+    press(&mut state, KeyCode::Char('n'));
+
+    let effect = press(&mut state, KeyCode::Char('q'));
+
+    assert_eq!(effect, Effect::None, "and does not quit the app");
+    assert_eq!(state.overlay, Overlay::None);
+}
+
+#[test]
+fn the_help_overlay_lists_only_keys_the_keymap_answers_to() {
+    // The help text is a claim about behavior; nothing kept it honest.
+    for (keys, description) in rtop::ui::help::BINDINGS {
+        // Section headings carry no key, and `:command <arg>` entries are
+        // command spellings rather than keys.
+        if keys.is_empty() || keys.starts_with(':') {
+            continue;
+        }
+        for key in keys.split(&[' ', '/', ','][..]).filter(|k| !k.is_empty()) {
+            assert!(
+                rtop::ui::help::is_documented_key(key),
+                "help lists {key:?} ({description}) but the keymap has no such binding"
+            );
+        }
+    }
 }

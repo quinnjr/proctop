@@ -116,7 +116,7 @@ impl Component for ProcessTable {
     type Props = ProcessTableProps;
 
     fn render(props: &ProcessTableProps, _hooks: &mut Hooks) -> Element {
-        ProcessTable::build(props)
+        ProcessTable::render_tree(props)
     }
 }
 
@@ -128,7 +128,7 @@ impl ProcessTable {
     /// that offscreen rows are never built at all — is invisible in a
     /// rendered frame, where "never built" and "built then clipped" look
     /// identical.
-    pub fn build(props: &ProcessTableProps) -> Element {
+    fn render_tree(props: &ProcessTableProps) -> Element {
         let window = props
             .selection
             .visible(props.rows.len(), props.height as usize);
@@ -205,7 +205,7 @@ fn process_row(row: &ProcRow, selected: bool, palette: &Palette) -> Element {
 
     let values = [
         (p.pid.to_string(), fg(palette.text)),
-        (row.user.clone(), fg(palette.label)),
+        (row.user.to_string(), fg(palette.label)),
         (p.priority.to_string(), fg(palette.text)),
         (p.nice.to_string(), fg(palette.text)),
         (format::bytes(p.vsize), fg(palette.muted)),

@@ -111,3 +111,16 @@ fn rejects_a_line_that_is_not_a_stat_record() {
     assert!(process::parse_pid_stat("not a stat line\n", PAGE).is_none());
     assert!(process::parse_pid_stat("42 (truncated) S 1\n", PAGE).is_none());
 }
+
+#[test]
+fn cpu_time_saturates_rather_than_overflowing() {
+    let line = format!(
+        "1 (x) R 0 0 0 0 -1 0 0 0 0 0 {} {} 0 0 20 0 1 0 0 0 0 0\n",
+        u64::MAX,
+        u64::MAX
+    );
+
+    let p = process::parse_pid_stat(&line, PAGE).expect("should parse");
+
+    assert_eq!(p.cpu_time(), u64::MAX, "saturated, not panicked");
+}

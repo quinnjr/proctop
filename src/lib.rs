@@ -1,9 +1,11 @@
 //! rtop — an htop-inspired system monitor built on ntui.
 //!
 //! The crate is split into a sampling half and a UI half. Everything under
-//! [`sample`], [`delta`], [`sort`], and [`model`] parses and reasons about
-//! `/proc` without knowing a terminal exists, and is tested against captured
-//! fixture text rather than the live system.
+//! [`sample`], [`delta`], [`sort`], [`filter`], [`tree`], [`format`],
+//! [`config`], and [`model`] reasons about processes without knowing a
+//! terminal exists, and is tested against captured fixture text rather than
+//! the live system. [`actions`] is the one module that changes the system,
+//! and [`sampler`] the one that reads it.
 
 pub mod actions;
 pub mod config;

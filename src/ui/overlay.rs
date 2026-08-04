@@ -42,26 +42,6 @@ pub fn panel(title: &str, palette: &Palette, mut body: Vec<Element>) -> Element 
     )
 }
 
-/// One line of text inside a panel.
-pub fn line(content: impl Into<String>, color: Color, weight: Weight) -> Element {
-    // Kept for callers that do not have the palette to hand; the panel's own
-    // background shows through because this row paints none of its own.
-    Element::view(
-        ViewProps {
-            height: Dimension::Cells(1),
-            width: Dimension::Cells(PANEL_WIDTH),
-            ..Default::default()
-        },
-        vec![Element::text(TextProps {
-            content: content.into(),
-            color,
-            weight,
-            wrap: TextWrap::Truncate,
-            ..Default::default()
-        })],
-    )
-}
-
 /// One line of text, painting the panel background across the full width.
 pub fn row(content: impl Into<String>, color: Color, weight: Weight, palette: &Palette) -> Element {
     Element::view(

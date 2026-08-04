@@ -26,12 +26,17 @@ pub fn parse_hwmon(chip: &str, files: &[(String, String)]) -> Vec<Sensor> {
             let (kind, index) = classify(name)?;
             let raw: f32 = contents.trim().parse().ok()?;
 
+            // Built once per reading, not once per file examined: this
+            // search is linear over `files`, and a chip directory holds
+            // scores of them.
+            let stem = format!("{}{index}", kind.prefix());
+            let label_file = format!("{stem}_label");
             let label = files
                 .iter()
-                .find(|(n, _)| *n == format!("{}{index}_label", kind.prefix()))
+                .find(|(n, _)| *n == label_file)
                 .map(|(_, l)| l.trim().to_string())
                 .filter(|l| !l.is_empty())
-                .unwrap_or_else(|| format!("{}{index}", kind.prefix()));
+                .unwrap_or(stem);
 
             Some((
                 kind,

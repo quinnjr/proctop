@@ -9,7 +9,7 @@ use ntui::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::actions::{NICE_MAX, NICE_MIN, SIGNALS, Signal};
 use crate::filter::Filter;
-use crate::model::ProcRow;
+use crate::model::{ProcKey, ProcRow};
 use crate::sort::SortKey;
 use crate::ui::selection::Selection;
 
@@ -52,21 +52,21 @@ pub enum Overlay {
     #[default]
     None,
     Help,
-    /// Confirming a signal for `pid`, with `index` into [`SIGNALS`].
+    /// Confirming a signal for a process, with `index` into [`SIGNALS`].
     Kill {
-        pid: i32,
+        key: ProcKey,
         name: String,
         index: usize,
     },
-    /// Typing a new nice value for `pid`.
+    /// Typing a new nice value for a process.
     Renice {
-        pid: i32,
+        key: ProcKey,
         name: String,
         input: String,
     },
     /// Everything known about the selected process.
     Detail {
-        pid: i32,
+        key: ProcKey,
     },
 }
 
@@ -83,6 +83,9 @@ pub struct UiState {
     pub overlay: Overlay,
     /// A one-line result or error from the last action.
     pub notice: Option<String>,
+    /// A multi-key sequence in progress — currently only `d`, awaiting the
+    /// second `d` of `dd`. Cleared by any key that is not its continuation.
+    pub pending: Option<char>,
 }
 
 /// Something `handle_key` decided but cannot do itself, because it touches
@@ -92,12 +95,18 @@ pub enum Effect {
     #[default]
     None,
     Quit,
+    /// Signal a process. Carries the full identity, not a bare pid: a
+    /// dialog can sit open while the process exits and its number is
+    /// recycled, and signalling the stranger that inherited it would be the
+    /// worst possible outcome of pressing Enter.
     Kill {
         pid: i32,
+        starttime: u64,
         signal: Signal,
     },
     Renice {
         pid: i32,
+        starttime: u64,
         nice: i32,
     },
 }
@@ -145,6 +154,22 @@ fn handle_normal_key(
     // Clearing on the next keystroke keeps a stale "killed 1234" from
     // sitting in the status bar indefinitely.
     state.notice = None;
+
+    // A multi-key sequence in progress claims this key, whether or not it
+    // completes. Taken unconditionally so any other key abandons it rather
+    // than leaving a prefix armed for later.
+    // Anything other than the completing key falls through and is treated as
+    // its own key, so an interrupted sequence costs nothing.
+    if state.pending.take() == Some('d') && key.code == KeyCode::Char('d') {
+        if let Some(row) = state.selected(rows) {
+            state.overlay = Overlay::Kill {
+                key: row.proc.key(),
+                name: row.proc.name.clone(),
+                index: 0,
+            };
+        }
+        return Effect::None;
+    }
 
     match key.code {
         KeyCode::Char('q') => return Effect::Quit,
@@ -200,7 +225,7 @@ fn handle_normal_key(
         KeyCode::Char('u') => {
             state.filter.user = match state.filter.user {
                 Some(_) => None,
-                None => state.selected(rows).map(|r| r.user.clone()),
+                None => state.selected(rows).map(|r| r.user.to_string()),
             };
             state.selection.to_top();
         }
@@ -213,25 +238,20 @@ fn handle_normal_key(
 
         KeyCode::Enter => {
             if let Some(row) = state.selected(rows) {
-                state.overlay = Overlay::Detail { pid: row.proc.pid };
-            }
-        }
-        // `dd`, vim's delete. Two keystrokes plus a confirmation, and
-        // deliberately not `k`, which is navigation in a list being actively
-        // scrolled.
-        KeyCode::Char('d') => {
-            if let Some(row) = state.selected(rows) {
-                state.overlay = Overlay::Kill {
-                    pid: row.proc.pid,
-                    name: row.proc.name.clone(),
-                    index: 0,
+                state.overlay = Overlay::Detail {
+                    key: row.proc.key(),
                 };
             }
         }
+        // `dd`, vim's delete: this arms the prefix, and the second `d`
+        // (handled above) opens the confirmation. Two keystrokes plus a
+        // confirmation, and deliberately not `k`, which is navigation in a
+        // list being actively scrolled.
+        KeyCode::Char('d') => state.pending = Some('d'),
         KeyCode::Char('n') => {
             if let Some(row) = state.selected(rows) {
                 state.overlay = Overlay::Renice {
-                    pid: row.proc.pid,
+                    key: row.proc.key(),
                     name: row.proc.name.clone(),
                     input: row.proc.nice.to_string(),
                 };
@@ -306,14 +326,15 @@ fn run_command(state: &mut UiState, command: &str) -> Effect {
             state.tree_view = !state.tree_view;
             state.selection.to_top();
         }
-        "sort" => match argument.and_then(parse_sort) {
+        "sort" => match argument.and_then(SortKey::from_word) {
             Some(key) => {
                 state.sort = key;
                 state.selection.to_top();
             }
             None => {
                 state.notice = Some(format!(
-                    "sort: expected one of pid, name, cpu, mem, time (got {})",
+                    "sort: expected one of {} (got {})",
+                    SortKey::all_spellings(),
                     argument.unwrap_or("nothing")
                 ));
             }
@@ -332,17 +353,6 @@ fn run_command(state: &mut UiState, command: &str) -> Effect {
     Effect::None
 }
 
-fn parse_sort(word: &str) -> Option<SortKey> {
-    Some(match word {
-        "pid" => SortKey::Pid,
-        "name" | "command" => SortKey::Name,
-        "cpu" => SortKey::Cpu,
-        "mem" | "memory" | "res" => SortKey::Memory,
-        "time" => SortKey::Time,
-        _ => return None,
-    })
-}
-
 fn handle_overlay_key(state: &mut UiState, key: KeyEvent) -> Effect {
     match &mut state.overlay {
         Overlay::None => Effect::None,
@@ -353,7 +363,9 @@ fn handle_overlay_key(state: &mut UiState, key: KeyEvent) -> Effect {
             Effect::None
         }
 
-        Overlay::Kill { pid, index, .. } => match key.code {
+        Overlay::Kill {
+            key: proc, index, ..
+        } => match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 state.overlay = Overlay::None;
                 Effect::None
@@ -368,7 +380,8 @@ fn handle_overlay_key(state: &mut UiState, key: KeyEvent) -> Effect {
             }
             KeyCode::Enter => {
                 let effect = Effect::Kill {
-                    pid: *pid,
+                    pid: proc.pid,
+                    starttime: proc.starttime,
                     signal: SIGNALS[*index],
                 };
                 state.overlay = Overlay::None;
@@ -377,8 +390,13 @@ fn handle_overlay_key(state: &mut UiState, key: KeyEvent) -> Effect {
             _ => Effect::None,
         },
 
-        Overlay::Renice { pid, input, .. } => match key.code {
-            KeyCode::Esc => {
+        Overlay::Renice {
+            key: proc, input, ..
+        } => match key.code {
+            // `q` closes this the way it closes the kill dialog; it is not a
+            // character a nice value can contain, so there is no conflict
+            // with the text field.
+            KeyCode::Esc | KeyCode::Char('q') => {
                 state.overlay = Overlay::None;
                 Effect::None
             }
@@ -394,7 +412,11 @@ fn handle_overlay_key(state: &mut UiState, key: KeyEvent) -> Effect {
             }
             KeyCode::Enter => match input.parse::<i32>() {
                 Ok(nice) if (NICE_MIN..=NICE_MAX).contains(&nice) => {
-                    let effect = Effect::Renice { pid: *pid, nice };
+                    let effect = Effect::Renice {
+                        pid: proc.pid,
+                        starttime: proc.starttime,
+                        nice,
+                    };
                     state.overlay = Overlay::None;
                     effect
                 }

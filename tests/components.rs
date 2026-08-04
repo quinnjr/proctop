@@ -1,5 +1,5 @@
 use ntui::element;
-use ntui::testing::TestTerminal;
+use ntui::testing::{TestTerminal, render_once};
 use rtop::model::{MemInfo, Proc, ProcRow, Sample};
 use rtop::sort::SortKey;
 use rtop::ui::Shared;
@@ -20,7 +20,7 @@ fn rows(n: usize) -> Vec<ProcRow> {
             },
             cpu: 0.0,
             mem: 0.01,
-            user: String::from("joseph"),
+            user: "joseph".into(),
             depth: 0,
         })
         .collect()
@@ -72,7 +72,8 @@ fn builds_only_the_rows_that_are_visible() {
     // This counts the elements actually constructed rather than reading the
     // rendered frame, because a frame cannot tell "never built" apart from
     // "built and then clipped" — and only the first is the property here.
-    let built = ProcessTable::build(&ProcessTableProps {
+    // `render_once` is ntui's harness for exactly this.
+    let built = render_once::<ProcessTable>(&ProcessTableProps {
         rows: Shared::new(rows(500)),
         selection: Selection::default(),
         height: 5,
@@ -193,4 +194,201 @@ fn renders_meters_on_a_machine_with_no_swap() {
     .expect("should render");
 
     assert!(t.frame_text().contains("Swp"));
+}
+
+// ---------- meter layout ----------
+
+/// The number of terminal rows `Meters` actually renders: its tallest meter
+/// column, plus the summary line beneath.
+fn rendered_meter_rows(cores: usize, width: u16) -> u16 {
+    let sample = Sample {
+        cores: vec![Default::default(); cores],
+        ..Sample::default()
+    };
+    let el = render_once::<Meters>(&MetersProps {
+        sample: Shared::new(sample),
+        palette: Palette::default(),
+        width,
+    });
+
+    let ntui::Node::View { children, .. } = el.node else {
+        panic!("expected a view")
+    };
+    // children = [row of meter columns, summary line]
+    let ntui::Node::View { children: cols, .. } = &children[0].node else {
+        panic!("expected the meter row")
+    };
+    let tallest = cols
+        .iter()
+        .map(|c| match &c.node {
+            ntui::Node::View { children, .. } => children.len(),
+            _ => 0,
+        })
+        .max()
+        .unwrap_or(0);
+    (tallest + 1) as u16
+}
+
+#[test]
+fn the_reported_header_height_matches_what_is_rendered() {
+    // `App` subtracts this from the terminal height to size the body. If the
+    // two disagree, the tab bar and status bar are pushed off the bottom by
+    // exactly the difference.
+    for cores in [1usize, 2, 4, 8, 16, 32, 64] {
+        for width in [40u16, 60, 80, 120, 200] {
+            assert_eq!(
+                rtop::ui::meters::height(cores, width),
+                rendered_meter_rows(cores, width),
+                "cores={cores} width={width}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_header_never_grows_past_its_row_budget() {
+    // A narrow pane cannot fit many columns, and without a cap the meters
+    // grow downward instead — 32 cores in a 50-column pane wanted 35 rows,
+    // which left no room for the process table, the tab bar, or the status
+    // bar. Dropping meters past the cap is the better failure.
+    for cores in [1usize, 8, 32, 64, 256] {
+        for width in [20u16, 40, 80, 200] {
+            let height = rtop::ui::meters::height(cores, width);
+            assert!(
+                height <= rtop::ui::meters::MAX_ROWS as u16 + 1,
+                "cores={cores} width={width} wanted {height} rows"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_terminal_too_narrow_for_one_meter_column_still_reports_a_sane_height() {
+    let height = rtop::ui::meters::height(32, 1);
+
+    assert!(height >= 2, "at least one meter and the summary");
+    assert!(height <= rtop::ui::meters::MAX_ROWS as u16 + 1);
+}
+
+// ---------- view row budgets ----------
+
+use ntui::Shared as NShared;
+use rtop::model::{IoRate, Sensor, SensorKind};
+use rtop::ui::io::{IoView, IoViewProps};
+use rtop::ui::sensors::{SensorView, SensorViewProps};
+
+fn count_rows(el: ntui::Element) -> usize {
+    match el.node {
+        ntui::Node::View { children, .. } => children.len(),
+        _ => 0,
+    }
+}
+
+#[test]
+fn the_sensors_view_fits_its_row_budget_across_every_kind() {
+    // The budget was applied per kind, so three kinds meant three times the
+    // rows the tab has room for and every fan reading fell below the fold.
+    let sensors: Vec<Sensor> = [
+        SensorKind::Temperature,
+        SensorKind::Fan,
+        SensorKind::Battery,
+    ]
+    .into_iter()
+    .flat_map(|kind| {
+        (0..10).map(move |i| Sensor {
+            chip: "chip".into(),
+            label: format!("{kind:?}-{i}"),
+            kind,
+            value: 40.0,
+        })
+    })
+    .collect();
+
+    let sample = Sample {
+        sensors: Some(NShared::new(sensors)),
+        ..Sample::default()
+    };
+
+    for height in [1u16, 2, 4, 8, 20] {
+        let rows = count_rows(render_once::<SensorView>(&SensorViewProps {
+            sample: Shared::new(sample.clone()),
+            palette: Palette::default(),
+            height,
+        }));
+        assert!(
+            rows <= height as usize,
+            "height={height} produced {rows} rows"
+        );
+    }
+}
+
+fn io_sample(disks: usize, nets: usize) -> Sample {
+    let rate = |name: String| IoRate {
+        name,
+        read_per_sec: 1_000,
+        write_per_sec: 1_000,
+    };
+    Sample {
+        disks: Some((0..disks).map(|i| rate(format!("disk{i}"))).collect()),
+        nets: Some((0..nets).map(|i| rate(format!("net{i}"))).collect()),
+        ..Sample::default()
+    }
+}
+
+#[test]
+fn the_io_view_fits_its_row_budget() {
+    for height in [1u16, 2, 4, 6, 10, 20] {
+        for (disks, nets) in [(0, 0), (1, 8), (8, 1), (20, 20)] {
+            let rows = count_rows(render_once::<IoView>(&IoViewProps {
+                sample: Shared::new(io_sample(disks, nets)),
+                palette: Palette::default(),
+                height,
+            }));
+            assert!(
+                rows <= height as usize,
+                "height={height} disks={disks} nets={nets} produced {rows} rows"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_io_view_gives_a_busy_list_the_room_a_quiet_one_does_not_need() {
+    // A fixed 50/50 split left half the tab blank while hiding interfaces.
+    let one_disk_many_nets = render_once::<IoView>(&IoViewProps {
+        sample: Shared::new(io_sample(1, 8)),
+        palette: Palette::default(),
+        height: 12,
+    });
+
+    assert_eq!(
+        count_rows(one_disk_many_nets),
+        12,
+        "the whole budget should be used"
+    );
+}
+
+#[test]
+fn an_unreadable_counter_file_reads_as_unavailable_not_as_idle() {
+    // A restricted container reporting its disks as idle is a lie.
+    let sample = Sample {
+        disks: None,
+        nets: Some(Vec::new()),
+        ..Sample::default()
+    };
+
+    let t = TestTerminal::new(
+        60,
+        20,
+        element!(IoView(
+            sample: Shared::new(sample),
+            palette: Palette::default(),
+            height: 20u16,
+        )),
+    )
+    .expect("should render");
+
+    let text = t.frame_text();
+    assert!(text.contains("unavailable"), "disks should say so:\n{text}");
+    assert!(text.contains("idle"), "nets genuinely are idle:\n{text}");
 }

@@ -29,12 +29,12 @@ impl Component for SensorView {
     type Props = SensorViewProps;
 
     fn render(props: &SensorViewProps, _hooks: &mut Hooks) -> Element {
-        SensorView::build(props)
+        SensorView::render_tree(props)
     }
 }
 
 impl SensorView {
-    pub fn build(props: &SensorViewProps) -> Element {
+    fn render_tree(props: &SensorViewProps) -> Element {
         let palette = &props.palette;
         let (headline, detail) = match &props.sample.sensors {
             // Readings are only taken while this tab is showing, so the
@@ -83,20 +83,22 @@ fn table(sensors: &[Sensor], props: &SensorViewProps) -> Element {
     let palette = &props.palette;
     {
         let mut children = vec![header(palette)];
-        // Fans and battery after temperatures, which is what people look at.
-        for kind in [
-            SensorKind::Temperature,
-            SensorKind::Fan,
-            SensorKind::Battery,
-        ] {
-            children.extend(
-                sensors
-                    .iter()
-                    .filter(|s| s.kind == kind)
-                    .take(props.height as usize)
-                    .map(|s| sensor_row(s, palette)),
-            );
-        }
+        // Temperatures first, then fans, then battery — the order people
+        // read them in. One chained pass with a single budget: taking
+        // `height` per kind meant three times the rows the tab has room
+        // for, pushing every fan and battery reading below the fold.
+        let budget = (props.height as usize).saturating_sub(1);
+        children.extend(
+            [
+                SensorKind::Temperature,
+                SensorKind::Fan,
+                SensorKind::Battery,
+            ]
+            .into_iter()
+            .flat_map(|kind| sensors.iter().filter(move |s| s.kind == kind))
+            .take(budget)
+            .map(|s| sensor_row(s, palette)),
+        );
 
         Element::view(
             ViewProps {

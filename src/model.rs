@@ -1,5 +1,7 @@
 //! Types shared across sampling, delta computation, and the UI.
 
+use std::sync::Arc;
+
 /// Cumulative CPU time in USER_HZ jiffies, as reported by a `cpu` line in
 /// `/proc/stat`. Every field is monotonic while the machine is up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -122,8 +124,12 @@ pub struct Proc {
 
 impl Proc {
     /// Total CPU time consumed since the process started.
+    ///
+    /// Saturating for the same reason every other sum on this path is: the
+    /// sampler must be panic-free by construction, and a debug-build
+    /// overflow is a panic.
     pub fn cpu_time(&self) -> u64 {
-        self.utime + self.stime
+        self.utime.saturating_add(self.stime)
     }
 
     /// This process's identity across samples.
@@ -230,7 +236,7 @@ impl Counters for NetStat {
 
 /// A process plus the figures derived from comparing it against the previous
 /// sample. This is what the table renders.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProcRow {
     pub proc: Proc,
     /// CPU consumption as a fraction of one core: `1.0` is a saturated core.
@@ -239,7 +245,11 @@ pub struct ProcRow {
     pub mem: f32,
     /// The owning username, or the bare uid when this machine has no passwd
     /// entry for it — common under containers and directory services.
-    pub user: String,
+    ///
+    /// Shared rather than owned: a machine has a handful of distinct users
+    /// and hundreds of processes, so cloning a row costs a refcount bump
+    /// instead of a string copy.
+    pub user: std::sync::Arc<str>,
     /// Nesting depth in the tree view; always 0 in the flat view.
     pub depth: usize,
 }
@@ -261,17 +271,33 @@ pub struct Sample {
     pub running: usize,
     /// Threads across all processes.
     pub threads: i64,
-    /// Per-device disk throughput.
-    pub disks: Vec<IoRate>,
-    /// Per-interface network throughput.
-    pub nets: Vec<IoRate>,
+    /// Per-device disk throughput, or `None` when `/proc/diskstats` could
+    /// not be read at all.
+    pub disks: Option<Vec<IoRate>>,
+    /// Per-interface network throughput, or `None` when `/proc/net/dev`
+    /// could not be read at all.
+    pub nets: Option<Vec<IoRate>>,
     /// Hardware readings, or `None` when they were not read for this
     /// sample — they are only read while something is displaying them.
     ///
-    /// `None` and `Some(vec![])` are deliberately different: the first means
-    /// "not read yet", the second "this machine genuinely has none", and the
-    /// sensors view says something different about each.
-    pub sensors: Option<Vec<Sensor>>,
+    /// `None` and `Some(vec![])` are deliberately different throughout this
+    /// struct: the first means "not read", the second "this machine
+    /// genuinely has none", and the views say something different about
+    /// each. Reporting an unreadable subsystem as empty is a lie a
+    /// restricted container would be told.
+    pub sensors: Option<ntui::Shared<Vec<Sensor>>>,
+}
+
+impl Default for ProcRow {
+    fn default() -> Self {
+        ProcRow {
+            proc: Proc::default(),
+            cpu: 0.0,
+            mem: 0.0,
+            user: Arc::from(""),
+            depth: 0,
+        }
+    }
 }
 
 impl MemInfo {

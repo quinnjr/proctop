@@ -41,9 +41,13 @@ are built.
 | `/` | Incremental search |
 | `:` | Command line |
 | `?` | Help |
-| `q`, `Esc` | Quit — `Esc` clears an active filter first |
+| `q` | Quit |
+| `Esc` | Close an overlay, else clear the filter, else quit |
 
 `:sort <col>`, `:filter <text>`, `:user <name>`, `:tree`, `:q`.
+
+Column names — `pid`, `name`/`command`, `cpu`, `mem`/`memory`/`res`, `time` —
+mean the same thing in the config file, in `--sort`, and in `:sort`.
 
 `dd` rather than `k` for kill is deliberate: `k` is navigation, and binding
 a destructive action to a navigation key in a list you are actively
@@ -97,8 +101,14 @@ override the file for one run and are never written back.
 ## Cost
 
 Sampling runs on `spawn_blocking`, never on the render thread. Measured on
-2026-08-04 with ~790 processes, release build: **7.7–8.4 ms per sample, a
-0.51–0.56% duty cycle** at the default 1500 ms refresh.
+2026-08-04 with ~790 processes, release build: **3.5–4.2 ms per sample, a
+0.23–0.28% duty cycle** at the default 1500 ms refresh.
+
+The largest single cost used to be reading `/proc/<pid>/status` for every
+process just to recover its owner — one of the more expensive files in
+procfs, since it makes the kernel walk memory accounting `stat` does not
+touch. The owner is the `/proc/<pid>` directory's own uid, so one `stat(2)`
+answers it, and dropping ~800 file reads per tick roughly halved the sample.
 
 Sensors are the exception and are handled specially. This machine exposes
 82 `hwmon` inputs and reading them costs ~30 ms — several times the whole
@@ -132,6 +142,10 @@ mode, overlay, and edge of the process list is tested without a terminal.
 
 `cargo run --release --example frames` prints each screen as plain text,
 for checking layout without a terminal.
+
+Deriving the visible rows — clone, filter, sort, nest — is memoized on the
+sample identity and the filter/sort settings, so a keystroke that does not
+change the list does not re-do that work for several hundred processes.
 
 ## License
 

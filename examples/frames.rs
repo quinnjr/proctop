@@ -35,7 +35,10 @@ async fn main() {
         ("Tree view", vec![KeyCode::Char('1'), KeyCode::Char('t')]),
         ("Help", vec![KeyCode::Char('t'), KeyCode::Char('?')]),
         ("Detail", vec![KeyCode::Esc, KeyCode::Enter]),
-        ("Kill", vec![KeyCode::Esc, KeyCode::Char('d')]),
+        (
+            "Kill",
+            vec![KeyCode::Esc, KeyCode::Char('d'), KeyCode::Char('d')],
+        ),
     ] {
         for key in keys {
             terminal.send_key(key).expect("should accept input");

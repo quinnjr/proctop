@@ -46,7 +46,7 @@ pub fn parse_meminfo(text: &str) -> Option<MemInfo> {
     // htop's definition: page cache plus reclaimable slab, minus shared
     // memory. Shmem lives in the page cache but cannot be reclaimed, so
     // leaving it in would understate used memory on a tmpfs-heavy system.
-    mem.cached = (page_cache + reclaimable).saturating_sub(shmem);
+    mem.cached = page_cache.saturating_add(reclaimable).saturating_sub(shmem);
 
     Some(mem)
 }
@@ -57,7 +57,7 @@ fn parse_kb(value: &str) -> Option<u64> {
     let mut fields = value.split_whitespace();
     let count: u64 = fields.next()?.parse().ok()?;
     match fields.next() {
-        Some("kB") | None => Some(count * 1024),
+        Some("kB") | None => Some(count.saturating_mul(1024)),
         // An unrecognized unit means the format changed under us; treating
         // the number as bytes would be a silent 1024x error.
         Some(_) => None,

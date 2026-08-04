@@ -506,8 +506,6 @@ dependencies = [
 [[package]]
 name = "ntui"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "95436cff5211d2de9a87e3d521faeba45501ad1ea7270f0e220ca77244c35185"
 dependencies = [
  "crossterm",
  "futures",
@@ -520,8 +518,6 @@ dependencies = [
 [[package]]
 name = "ntui-macros"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a1eadd35449a6b1dc8fe1e3e96bd322a01df5c35353128c2be6f0da389a9c19"
 dependencies = [
  "proc-macro2",
  "quote",

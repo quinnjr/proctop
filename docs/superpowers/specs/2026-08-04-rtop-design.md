@@ -215,6 +215,36 @@ Once a workaround has proven its shape in rtop, it is a candidate to
 promote into `ntui`. Promotion is a separate decision made per item, not an
 obligation.
 
+### Resolved upstream — 2026-08-04
+
+All eight were addressed in `ntui`, plus a ninth the fixes needed:
+
+| Gap | Shipped as |
+|---|---|
+| 1. `props_eq` deep-compares | `ntui::Shared<T>` — `Arc` compared by `ptr_eq` |
+| 2. Selectable table | `TableProps::selected` |
+| 3. Virtualized table | `TableProps::viewport` + `Viewport` |
+| 4. Per-cell styling | `TableProps::cell_style`, `CellStyler`, `CellStyle`, `CellContext` |
+| 5. `frame_text` carries no styling | `TestTerminal::cell` / `buffer` / `row` |
+| 6. `render` uncallable from a test | `testing::render_once::<C>(&props)` |
+| 7. List cursor hook | `Hooks::use_list_selection` + `ListSelection` |
+| 8. `Theme` too small | Already possible — `use_context::<T>()` takes any type; documented with a worked example |
+| — | `Hooks::use_memo`, which the rtop fixes needed |
+
+rtop dropped two of its own workarounds in turn: the `build` methods split
+out of every component's `render` existed only so tests could inspect an
+element tree, and are replaced by `render_once`. `ui::Shared` is now a
+re-export of `ntui::Shared`.
+
+rtop keeps its own `ProcessTable` rather than moving onto the upgraded
+`ntui::widgets::Table`, and the reason is not inertia: the process table
+right-aligns numeric columns and truncates them from the *left* (so a long
+pid keeps its significant digits), left-aligns and right-truncates text
+ones, and prefixes tree guides at depth. None of that is general enough to
+push into a widget, and a `Table` that took a per-column alignment and
+truncation policy would be a worse `Table`. The general case — selection,
+virtualization, per-cell color — is what went upstream.
+
 ## 4. UI structure
 
 ```
@@ -251,8 +281,8 @@ memory, but they are not the design center.
 | `C-d` / `C-u` | Half-page down / up |
 | `PgDn` / `PgUp` | Full page down / up |
 | `I` | Reverse the sort direction |
-| `/` | Incremental filter; `n` / `N` cycle matches |
-| `:` | Command line — `:sort cpu`, `:tree`, `:kill`, `:q` |
+| `/` | Incremental filter (`n` is renice; filtering narrows rather than cycles) |
+| `:` | Command line — `:sort cpu`, `:filter <text>`, `:user <name>`, `:tree`, `:q` |
 | `dd` | Kill selected process (confirmation modal) |
 | `<` / `>` | Previous / next sort column |
 | `t` | Toggle tree view |
@@ -408,6 +438,70 @@ precisely because of this: `None` means "not read", `Some(vec![])` means
 "this machine genuinely has none", and the view says something different
 about each. Conflating them made a tab that had not sampled yet claim the
 hardware did not exist.
+
+## 10. Audit — 2026-08-04
+
+A conformance and efficiency audit checked 202 units against this document
+and the README. 165 conformed; 37 findings were raised and all were fixed.
+The four that mattered:
+
+**`Config::load_or_default` swallowed a broken config.** Its own doc said "a
+file that *is* there but is broken is still an error", and it had no error
+return type at all. Replaced with `load_from_optional`, which distinguishes
+"missing" by the read's error kind rather than by `Path::exists` — the
+latter reports `false` for a permission error, which would take a present
+but unreadable file down the defaults branch.
+
+**`dd` was a single `d`.** Three prose sources and the code's own comment
+said two keystrokes; the binding took one, and the test encoded the
+one-key behavior. `UiState::pending` now holds the prefix.
+
+**The kill dialog was transparent.** It was the last caller of
+`overlay::line`, the row builder that paints no background, so the process
+table showed through the one dialog users read carefully before pressing
+Enter. Invisible to tests, because `TestTerminal::frame_text` carries no
+styling — which is why `TestTerminal::cell` was added to ntui. `line` is
+deleted.
+
+**The meter header could push the UI off screen.** `columns =
+wanted.min(fits)` let a narrow pane defeat `MAX_ROWS`: 32 cores in a
+50-column pane wanted 35 rows, leaving `body_rows = 0`. Row count is now
+capped, the renderer drops meters past the cap rather than growing, and
+`App` clamps the header so the chrome always survives.
+
+Two findings changed the design rather than just the code:
+
+- **`Sample::disks` and `Sample::nets` are now `Option`**, joining
+  `sensors`. §6 promises an unavailable subsystem renders as "unavailable";
+  an unreadable `/proc/diskstats` was parsing to an empty list and rendering
+  as "idle", which is a lie a restricted container would be told.
+- **One sort vocabulary.** `--sort memory` worked while `sort_by = "memory"`
+  was a *fatal* startup error, because three independent spelling tables had
+  drifted. `SortKey::SPELLINGS` is now the single source, used by the CLI,
+  the command line, and the `Deserialize` impl.
+
+### What the budget caught
+
+Adding the sensors reader took the duty cycle from 0.4% to 2.5% (§9). The
+audit found the opposite kind of win in the per-process loop: reading
+`/proc/<pid>/status` for every process, solely to recover its owner, when
+the owner is the `/proc/<pid>` directory's uid and one `stat(2)` answers it.
+Removing ~800 reads per tick roughly halved the sample, to **3.5–4.2 ms, a
+0.23–0.28% duty cycle**.
+
+Deriving the visible rows is now memoized on `(sample identity, filter,
+sort, direction, tree view)`. It ran on every render — so a keystroke that
+moved the cursor one row re-cloned, re-filtered and re-sorted ~790 rows,
+each holding two owned strings. `ProcRow::user` is an `Arc<str>` interned
+per uid for the same reason.
+
+The sampling loop no longer restarts on a tab switch. Keying it on the
+visible tab abandoned the in-flight `spawn_blocking` at its await point (the
+work still ran, its result was dropped, and the next sample's rates then
+covered a doubled interval) and started a fresh loop that sampled
+immediately — so holding Tab sampled far faster than `refresh_ms`. Whether
+to read sensors is a parameter of a sample, passed through an atomic, not a
+reason to tear the loop down.
 
 ## Dependencies
 

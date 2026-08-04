@@ -13,7 +13,9 @@ const USER_HZ: u64 = 100;
 /// information: in a table column, `128M` says as much as `128.4M` in one
 /// fewer cell.
 pub fn bytes(n: u64) -> String {
-    const UNITS: [&str; 4] = ["K", "M", "G", "T"];
+    // Through exbibytes, so the claim holds for every `u64` rather than
+    // only for the range /proc happens to produce.
+    const UNITS: [&str; 6] = ["K", "M", "G", "T", "P", "E"];
 
     if n < 1024 {
         return format!("{n}B");
@@ -21,7 +23,9 @@ pub fn bytes(n: u64) -> String {
 
     let mut value = n as f64 / 1024.0;
     let mut unit = 0;
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
+    // Advances at 1023.5 rather than 1024 because the `{:.0}` branch below
+    // rounds: at 1023.6 the smaller unit would print "1024K", four digits.
+    while value >= 1023.5 && unit + 1 < UNITS.len() {
         value /= 1024.0;
         unit += 1;
     }

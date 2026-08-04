@@ -73,8 +73,8 @@ impl Config {
     }
 
     /// Read and parse a config file. Missing, unreadable, and malformed are
-    /// all errors here — see [`Config::load_or_default`] for the tolerant
-    /// version.
+    /// all errors here — see [`Config::load_from_optional`] when the file is
+    /// allowed not to exist.
     pub fn load_from(path: impl AsRef<Path>) -> Result<Config, Error> {
         let path = path.as_ref();
         let text =
@@ -82,28 +82,29 @@ impl Config {
         Config::parse(&text).map_err(|e| Error(format!("{}: {e}", path.display())))
     }
 
-    /// Read a config file if it exists, otherwise use the defaults.
+    /// Read a config file that is allowed not to exist.
     ///
-    /// A file that is not there is the normal case. A file that *is* there
-    /// but is broken is still an error — see [`Config::load`].
-    pub fn load_or_default(path: impl AsRef<Path>) -> Config {
+    /// A missing file yields the defaults. Everything else — an unreadable
+    /// file, a malformed one, an unknown key — is an error, because a
+    /// setting that appears not to work with nothing anywhere saying why is
+    /// worse than a refusal to start.
+    ///
+    /// "Missing" is decided by the read's own error kind rather than by
+    /// [`Path::exists`], which reports `false` for a permission error and
+    /// would quietly take the defaults branch for a file that is right there.
+    pub fn load_from_optional(path: impl AsRef<Path>) -> Result<Config, Error> {
         let path = path.as_ref();
-        if !path.exists() {
-            return Config::default();
-        }
-        Config::load_from(path).unwrap_or_default()
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+            Err(e) => return Err(Error(format!("{}: {e}", path.display()))),
+        };
+        Config::parse(&text).map_err(|e| Error(format!("{}: {e}", path.display())))
     }
 
     /// Load from the standard location, honouring `XDG_CONFIG_HOME`.
-    ///
-    /// A missing file yields the defaults; a malformed one is an error the
-    /// caller should report rather than paper over.
     pub fn load() -> Result<Config, Error> {
-        let path = default_path();
-        if !path.exists() {
-            return Ok(Config::default());
-        }
-        Config::load_from(path)
+        Config::load_from_optional(default_path())
     }
 }
 

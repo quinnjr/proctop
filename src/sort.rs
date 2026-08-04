@@ -3,20 +3,72 @@
 use crate::model::ProcRow;
 
 /// A sortable column of the process table.
-///
-/// The serde names are the ones written in the config file and accepted by
-/// `--sort`, so they are short rather than matching the variant spelling.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SortKey {
     Pid,
     Name,
     #[default]
     Cpu,
-    #[serde(rename = "mem")]
     Memory,
     /// Accumulated CPU time since the process started.
     Time,
+}
+
+impl SortKey {
+    /// Every spelling a column answers to.
+    ///
+    /// The canonical name is first; the rest are aliases. This is the one
+    /// vocabulary shared by the config file, `--sort`, and the `:sort`
+    /// command — a name accepted by one entry point and rejected by another
+    /// is how a user learns an alias interactively and then writes a config
+    /// their program refuses to start with.
+    pub const SPELLINGS: [(SortKey, &'static [&'static str]); 5] = [
+        (SortKey::Pid, &["pid"]),
+        (SortKey::Name, &["name", "command"]),
+        (SortKey::Cpu, &["cpu"]),
+        (SortKey::Memory, &["mem", "memory", "res"]),
+        (SortKey::Time, &["time"]),
+    ];
+
+    /// Parse a column name, in any of its accepted spellings.
+    pub fn from_word(word: &str) -> Option<SortKey> {
+        SortKey::SPELLINGS
+            .iter()
+            .find(|(_, names)| names.contains(&word))
+            .map(|(key, _)| *key)
+    }
+
+    /// The canonical spelling, for error messages and round-tripping.
+    pub fn canonical(self) -> &'static str {
+        SortKey::SPELLINGS
+            .iter()
+            .find(|(key, _)| *key == self)
+            .map(|(_, names)| names[0])
+            .unwrap_or("cpu")
+    }
+
+    /// Every accepted spelling, comma-separated — for help text and errors,
+    /// so the enumeration cannot drift from what is actually accepted.
+    pub fn all_spellings() -> String {
+        SortKey::SPELLINGS
+            .iter()
+            .flat_map(|(_, names)| names.iter())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SortKey {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let word = String::deserialize(d)?;
+        SortKey::from_word(&word).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown sort column {word:?}; expected one of {}",
+                SortKey::all_spellings()
+            ))
+        })
+    }
 }
 
 /// Order the table by `key`.

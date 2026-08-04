@@ -194,3 +194,49 @@ fn treats_a_zero_interval_as_every_time() {
 
     assert!(should_refresh(Some(now), now, Duration::ZERO));
 }
+
+#[test]
+fn the_denominator_does_not_double_count_guest_time_either() {
+    // The same correction as `cpu_usage`, on the denominator of every
+    // per-process percentage. Adding `+ t.guest` here would shrink every
+    // figure on a virtualization host with nothing else failing.
+    let prev = CpuTimes::default();
+    let cur = CpuTimes {
+        user: 100, // already includes the 40 guest jiffies
+        guest: 40,
+        idle: 0,
+        ..CpuTimes::default()
+    };
+
+    assert_eq!(rtop::delta::total_jiffies(&prev, &cur), 100);
+}
+
+#[test]
+fn the_denominator_clamps_a_counter_that_went_backwards() {
+    let prev = CpuTimes {
+        user: 1_000,
+        ..CpuTimes::default()
+    };
+    let cur = CpuTimes {
+        user: 10,
+        ..CpuTimes::default()
+    };
+
+    assert_eq!(rtop::delta::total_jiffies(&prev, &cur), 0);
+}
+
+#[test]
+fn the_denominator_saturates_rather_than_overflowing() {
+    // The sampler must be panic-free by construction, and a debug-build
+    // overflow is a panic. Unreachable from real /proc, but the rule is
+    // "by construction".
+    let cur = CpuTimes {
+        user: u64::MAX,
+        nice: u64::MAX,
+        system: u64::MAX,
+        idle: u64::MAX,
+        ..CpuTimes::default()
+    };
+
+    let _ = rtop::delta::total_jiffies(&CpuTimes::default(), &cur);
+}

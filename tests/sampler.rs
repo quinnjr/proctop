@@ -102,7 +102,7 @@ fn reads_sensors_when_they_are() {
     let sensors = sample.sensors.expect("asked for, so read");
     // Not every machine has hwmon — VMs and containers generally do not —
     // so this only asserts the readings are coherent if any came back.
-    for sensor in &sensors {
+    for sensor in sensors.iter() {
         assert!(!sensor.chip.is_empty());
         assert!(!sensor.label.is_empty());
         assert!(sensor.value.is_finite());

@@ -9,7 +9,7 @@ fn row(pid: i32, name: &str, user: &str, state: ProcState) -> ProcRow {
             state,
             ..Proc::default()
         },
-        user: user.to_string(),
+        user: user.into(),
         ..ProcRow::default()
     }
 }

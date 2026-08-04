@@ -106,6 +106,53 @@ pub fn nice_of(pid: i32) -> io::Result<i32> {
     Ok(value)
 }
 
+/// Send `signal` to `pid`, but only if it is still the process that started
+/// at `starttime`.
+///
+/// Linux recycles PIDs. Anything that captures a pid and acts on it later —
+/// a confirmation dialog the user leaves open, a queued action — can find
+/// the number reattached to something else by the time it fires, and
+/// signalling that stranger is the worst outcome available. Identity here
+/// means the same `(pid, starttime)` pair the sampler keys on.
+pub fn kill_if_unchanged(pid: i32, starttime: u64, signal: Signal) -> io::Result<()> {
+    verify_unchanged(pid, starttime)?;
+    kill(pid, signal)
+}
+
+/// Set the nice value of `pid`, subject to the same identity check as
+/// [`kill_if_unchanged`].
+pub fn renice_if_unchanged(pid: i32, starttime: u64, nice: i32) -> io::Result<()> {
+    verify_unchanged(pid, starttime)?;
+    renice(pid, nice)
+}
+
+/// Confirm `pid` is still the process that started at `starttime`.
+///
+/// There is an unavoidable race between this check and the syscall that
+/// follows it — the kernel offers no way to signal a process by identity —
+/// but it closes the window from "however long the dialog was open" to
+/// "microseconds", which is the difference that matters.
+fn verify_unchanged(pid: i32, starttime: u64) -> io::Result<()> {
+    checked_pid(pid)?;
+
+    let exited = || {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("process {pid} exited before the action could be applied"),
+        )
+    };
+
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|_| exited())?;
+    // The page size is irrelevant here: only `starttime` is read, and it is
+    // not scaled by it.
+    let proc = crate::sample::process::parse_pid_stat(&stat, 1).ok_or_else(exited)?;
+
+    if proc.starttime != starttime {
+        return Err(exited());
+    }
+    Ok(())
+}
+
 /// Reject the PID values that address something other than one process.
 fn checked_pid(pid: i32) -> io::Result<()> {
     if pid > 0 {

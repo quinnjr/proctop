@@ -24,12 +24,12 @@ impl Component for Detail {
     type Props = DetailProps;
 
     fn render(props: &DetailProps, _hooks: &mut Hooks) -> Element {
-        Detail::build(props)
+        Detail::render_tree(props)
     }
 }
 
 impl Detail {
-    pub fn build(props: &DetailProps) -> Element {
+    fn render_tree(props: &DetailProps) -> Element {
         let palette = &props.palette;
 
         let Some(row) = &props.row else {
@@ -54,7 +54,7 @@ impl Detail {
             overlay::field("Command", &p.name, palette),
             overlay::field("PID", p.pid.to_string(), palette),
             overlay::field("Parent", p.ppid.to_string(), palette),
-            overlay::field("User", &row.user, palette),
+            overlay::field("User", row.user.to_string(), palette),
             overlay::field(
                 "State",
                 format!("{} ({})", p.state.as_char(), state_name(p)),
@@ -117,6 +117,10 @@ pub struct KillProps {
     pub name: String,
     /// Index into [`SIGNALS`].
     pub index: usize,
+    /// Whether the process is still in the latest sample. A dialog can sit
+    /// open while its process exits, and pressing Enter on a dead pid is
+    /// worth warning about before it happens.
+    pub alive: bool,
     pub palette: Palette,
 }
 
@@ -126,12 +130,12 @@ impl Component for Kill {
     type Props = KillProps;
 
     fn render(props: &KillProps, _hooks: &mut Hooks) -> Element {
-        Kill::build(props)
+        Kill::render_tree(props)
     }
 }
 
 impl Kill {
-    pub fn build(props: &KillProps) -> Element {
+    fn render_tree(props: &KillProps) -> Element {
         let palette = &props.palette;
         let mut body = vec![
             overlay::row(
@@ -143,25 +147,42 @@ impl Kill {
             overlay::row("", palette.text, Weight::Normal, palette),
         ];
 
+        if !props.alive {
+            body.push(overlay::row(
+                "This process has exited.",
+                palette.alert,
+                Weight::Bold,
+                palette,
+            ));
+            body.push(overlay::row("", palette.text, Weight::Normal, palette));
+            body.push(overlay::row(
+                "Esc to close",
+                palette.muted,
+                Weight::Normal,
+                palette,
+            ));
+            return overlay::panel("Send signal", palette, body);
+        }
+
         for (i, signal) in SIGNALS.iter().enumerate() {
             let selected = i == props.index;
-            body.push(overlay::line(
+            body.push(overlay::row(
                 format!(
                     "{} {:<8} {}",
                     if selected { "▸" } else { " " },
                     signal.label(),
                     signal.number()
                 ),
-                if selected {
-                    palette.selected_fg
-                } else {
-                    palette.text
-                },
+                // Against the panel background, not the selection bar, so
+                // the marked signal takes a foreground accent rather than
+                // the inverted pair used for table rows.
+                if selected { palette.warn } else { palette.text },
                 if selected {
                     Weight::Bold
                 } else {
                     Weight::Normal
                 },
+                palette,
             ));
         }
 
@@ -182,6 +203,8 @@ pub struct ReniceProps {
     pub pid: i32,
     pub name: String,
     pub input: String,
+    /// Whether the process is still in the latest sample.
+    pub alive: bool,
     pub palette: Palette,
 }
 
@@ -191,13 +214,38 @@ impl Component for Renice {
     type Props = ReniceProps;
 
     fn render(props: &ReniceProps, _hooks: &mut Hooks) -> Element {
-        Renice::build(props)
+        Renice::render_tree(props)
     }
 }
 
 impl Renice {
-    pub fn build(props: &ReniceProps) -> Element {
+    fn render_tree(props: &ReniceProps) -> Element {
         let palette = &props.palette;
+
+        if !props.alive {
+            return overlay::panel(
+                "Renice",
+                palette,
+                vec![
+                    overlay::row(
+                        format!("{} (pid {})", props.name, props.pid),
+                        palette.text,
+                        Weight::Bold,
+                        palette,
+                    ),
+                    overlay::row("", palette.text, Weight::Normal, palette),
+                    overlay::row(
+                        "This process has exited.",
+                        palette.alert,
+                        Weight::Bold,
+                        palette,
+                    ),
+                    overlay::row("", palette.text, Weight::Normal, palette),
+                    overlay::row("Esc to close", palette.muted, Weight::Normal, palette),
+                ],
+            );
+        }
+
         overlay::panel(
             "Renice",
             palette,

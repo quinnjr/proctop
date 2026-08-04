@@ -78,3 +78,21 @@ fn rejects_a_misspelled_color_key() {
 
     assert!(err.to_string().contains("cpu_users"), "{err}");
 }
+
+#[test]
+fn rejects_a_six_byte_hex_string_that_is_not_six_ascii_digits() {
+    // The length guard counts bytes, but the slices are at byte offsets:
+    // "#aébcd" is six bytes, and splitting it at offset 2 lands inside the
+    // 'é'. A theme file is user input, so this must be an error, not a panic.
+    let err = Palette::parse(r##"cpu_user = "#aébcd""##).expect_err("should reject");
+
+    assert!(err.to_string().contains("aébcd"), "{err}");
+}
+
+#[test]
+fn rejects_multibyte_hex_of_every_length_without_panicking() {
+    for text in ["#éé", "#ééé", "#aaéé", "#ééééé", "#ααααα", "#\u{1F600}aa"] {
+        let result = Palette::parse(&format!("cpu_user = {text:?}"));
+        assert!(result.is_err(), "{text} should be rejected");
+    }
+}

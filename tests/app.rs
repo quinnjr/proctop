@@ -251,6 +251,13 @@ async fn opens_the_detail_pane_for_the_selected_process() {
 async fn the_kill_dialog_asks_before_signalling_anything() {
     let mut t = sampled().await;
 
+    // The binding is `dd`: one `d` must open nothing.
+    t.send_key(KeyCode::Char('d')).expect("should accept input");
+    assert!(
+        !t.frame_text().contains("Send signal"),
+        "a single d opened the dialog"
+    );
+
     t.send_key(KeyCode::Char('d')).expect("should accept input");
 
     let text = t.frame_text();

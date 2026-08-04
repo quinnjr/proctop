@@ -104,7 +104,15 @@ pub fn total_jiffies(prev: &CpuTimes, cur: &CpuTimes) -> u64 {
     let fields = |t: &CpuTimes| {
         // Guest time is already counted inside user/nice, so it is excluded
         // here for the same reason it is subtracted out in `cpu_usage`.
-        t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq + t.steal
+        //
+        // Saturating rather than plain `+`: this runs on the sampling task,
+        // which the design requires to be panic-free *by construction*, and
+        // a debug-build overflow is a panic.
+        [
+            t.user, t.nice, t.system, t.idle, t.iowait, t.irq, t.softirq, t.steal,
+        ]
+        .into_iter()
+        .fold(0u64, u64::saturating_add)
     };
     fields(cur).saturating_sub(fields(prev))
 }
@@ -167,7 +175,7 @@ pub fn cpu_usage(prev: &CpuTimes, cur: &CpuTimes) -> CpuUsage {
     let (prev, cur) = (split(prev), split(cur));
     let deltas: [u64; 10] = std::array::from_fn(|i| cur[i].saturating_sub(prev[i]));
 
-    let total: u64 = deltas.iter().sum();
+    let total: u64 = deltas.iter().copied().fold(0u64, u64::saturating_add);
     if total == 0 {
         return CpuUsage::default();
     }

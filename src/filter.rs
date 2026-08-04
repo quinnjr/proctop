@@ -20,16 +20,16 @@ impl Filter {
         !self.query.is_empty() || self.user.is_some() || self.hide_kernel_threads
     }
 
-    fn admits(&self, row: &ProcRow) -> bool {
+    fn admits(&self, row: &ProcRow, needle: &str, pid: Option<i32>) -> bool {
         if self.hide_kernel_threads && is_kernel_thread(row) {
             return false;
         }
         if let Some(user) = &self.user
-            && &row.user != user
+            && row.user.as_ref() != user.as_str()
         {
             return false;
         }
-        if !self.query.is_empty() && !matches_query(row, &self.query) {
+        if !self.query.is_empty() && !matches_query(row, needle, pid) {
             return false;
         }
         true
@@ -41,7 +41,14 @@ pub fn apply(rows: Vec<ProcRow>, filter: &Filter) -> Vec<ProcRow> {
     if !filter.is_active() {
         return rows;
     }
-    rows.into_iter().filter(|row| filter.admits(row)).collect()
+    // The query is lowercased once here rather than once per row: this runs
+    // over the whole process list on every keystroke of an incremental
+    // search, so per-row work on the needle is multiplied by both.
+    let needle = filter.query.to_lowercase();
+    let pid = filter.query.parse::<i32>().ok();
+    rows.into_iter()
+        .filter(|row| filter.admits(row, &needle, pid))
+        .collect()
 }
 
 /// Match the command name case-insensitively, or the PID exactly.
@@ -49,15 +56,26 @@ pub fn apply(rows: Vec<ProcRow>, filter: &Filter) -> Vec<ProcRow> {
 /// Case-insensitivity matters more than it looks: typing `firefox` and
 /// getting nothing because the process is named `Firefox` reads as a broken
 /// search rather than a precise one.
-fn matches_query(row: &ProcRow, query: &str) -> bool {
-    if row.proc.pid.to_string() == query {
+fn matches_query(row: &ProcRow, needle: &str, pid: Option<i32>) -> bool {
+    // Compare the parsed number rather than formatting the pid, which would
+    // allocate for every row.
+    if pid == Some(row.proc.pid) {
         return true;
     }
-    contains_ignore_case(&row.proc.name, query)
+    contains_ignore_case(&row.proc.name, needle)
 }
 
+/// `needle` must already be lowercase.
 fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
-    haystack.to_lowercase().contains(&needle.to_lowercase())
+    if needle.is_empty() {
+        return true;
+    }
+    // Command names are short and overwhelmingly ASCII, so the common case
+    // avoids allocating entirely.
+    if haystack.is_ascii() {
+        return haystack.to_ascii_lowercase().contains(needle);
+    }
+    haystack.to_lowercase().contains(needle)
 }
 
 /// A kernel thread has no address space of its own, which is how htop

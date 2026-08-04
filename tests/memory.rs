@@ -59,3 +59,26 @@ fn treats_a_machine_without_swap_as_zero_rather_than_missing() {
     assert_eq!(mem.swap_total, 0);
     assert_eq!(mem.swap_used(), 0);
 }
+
+#[test]
+fn saturates_rather_than_overflowing_on_an_absurd_value() {
+    // The kB-to-bytes multiply is on the sampling path, which the spec
+    // requires to be panic-free by construction; a debug-build overflow is
+    // a panic. /proc contents are influenceable inside a namespace.
+    let mem = memory::parse_meminfo(&format!("MemTotal: {} kB\n", u64::MAX)).expect("should parse");
+
+    assert_eq!(mem.total, u64::MAX);
+}
+
+#[test]
+fn saturates_the_cached_sum_too() {
+    let text = format!(
+        "MemTotal: 100 kB\nCached: {} kB\nSReclaimable: {} kB\n",
+        u64::MAX,
+        u64::MAX
+    );
+
+    let mem = memory::parse_meminfo(&text).expect("should parse");
+
+    assert_eq!(mem.cached, u64::MAX);
+}

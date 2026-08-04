@@ -110,7 +110,81 @@ fn names_the_file_and_the_problem_when_it_cannot_be_read() {
 fn an_absent_config_file_loads_defaults_rather_than_failing() {
     // Distinct from an unreadable one: nothing there is fine, something
     // there that is broken is not.
-    let config = Config::load_or_default("/nonexistent/rtop/config.toml");
+    let config = Config::load_from_optional("/nonexistent/rtop/config.toml")
+        .expect("a missing file is not an error");
 
     assert_eq!(config, Config::default());
+}
+
+#[test]
+fn a_malformed_config_file_is_an_error_rather_than_silently_defaulted() {
+    // The whole argument for rejecting unknown keys: a setting that appears
+    // not to work, with nothing anywhere saying why, is worse than a refusal
+    // to start. That has to hold for a file on disk, not just for a string.
+    let dir = temp_dir("malformed");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "refresh_msec = 500\n").unwrap();
+
+    let err = Config::load_from_optional(&path).expect_err("should reject");
+
+    assert!(err.to_string().contains("refresh_msec"), "{err}");
+    assert!(
+        err.to_string().contains(&path.display().to_string()),
+        "should name the file: {err}"
+    );
+}
+
+#[test]
+fn a_present_but_unreadable_config_file_is_an_error_not_an_absent_one() {
+    // `Path::exists()` reports false for a permission error, which would
+    // quietly take the "missing, use defaults" branch.
+    let dir = temp_dir("unreadable");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "refresh_ms = 500\n").unwrap();
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o000);
+    std::fs::set_permissions(&path, perms).unwrap();
+
+    let result = Config::load_from_optional(&path);
+
+    // Running as root defeats the permission bit; skip rather than fail.
+    if result.is_ok() && unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let err = result.expect_err("should surface the read error");
+    assert!(
+        err.to_string().contains(&path.display().to_string()),
+        "should name the file: {err}"
+    );
+}
+
+/// A fresh directory under the system temp dir, removed if it already exists.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("rtop-config-test-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_config_file_accepts_every_spelling_the_cli_and_command_line_do() {
+    // One vocabulary, three entry points. A user who learns an alias from
+    // `:sort memory` and writes it into the config must not get a program
+    // that refuses to start.
+    for word in [
+        "pid", "name", "command", "cpu", "mem", "memory", "res", "time",
+    ] {
+        let from_word =
+            SortKey::from_word(word).unwrap_or_else(|| panic!("{word} should be a known column"));
+        let config = Config::parse(&format!("[processes]\nsort_by = \"{word}\""))
+            .unwrap_or_else(|e| panic!("config should accept {word}: {e}"));
+
+        assert_eq!(config.processes.sort_by, from_word, "{word}");
+    }
+}
+
+#[test]
+fn rejects_a_word_that_is_not_a_column_at_every_entry_point() {
+    assert_eq!(SortKey::from_word("nonsense"), None);
+    assert!(Config::parse("[processes]\nsort_by = \"nonsense\"").is_err());
 }

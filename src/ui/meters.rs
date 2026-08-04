@@ -12,7 +12,7 @@ use crate::ui::palette::Palette;
 
 /// Most rows of meters to show before adding another column, so a 32-core
 /// machine does not push the process table off the screen.
-const MAX_ROWS: usize = 9;
+pub const MAX_ROWS: usize = 9;
 /// Width of one meter column, including its label and figure.
 const METER_WIDTH: u16 = 30;
 /// Cells between columns.
@@ -55,8 +55,13 @@ impl Component for Meters {
         // core 1 sit next to each other vertically rather than across the
         // screen from each other.
         let rows = rows_per_column(cores.len(), props.width);
+        // How many columns the terminal can actually show. Meters past
+        // `rows * columns` are dropped rather than allowed to grow the
+        // header past its budget — see `rows_per_column`.
+        let columns_fit = ((props.width + METER_GAP) / (METER_WIDTH + METER_GAP)).max(1) as usize;
+
         let mut columns: Vec<Vec<Element>> = Vec::new();
-        for (i, meter) in meters.into_iter().enumerate() {
+        for (i, meter) in meters.into_iter().take(rows * columns_fit).enumerate() {
             let column = i / rows;
             if columns.len() <= column {
                 columns.push(Vec::new());
@@ -104,12 +109,18 @@ impl Component for Meters {
 /// vertically — but only as many columns as the terminal is actually wide
 /// enough for. Without that ceiling a 32-core machine lays out five columns
 /// and the last one, holding memory and swap, is clipped off the right edge.
+///
+/// The result is capped at [`MAX_ROWS`] regardless. A pane too narrow for
+/// enough columns would otherwise grow the header downward without limit —
+/// 32 cores in a 50-column pane wanted 35 rows, which leaves nothing for the
+/// process table, the tab bar or the status bar. Dropping the meters that do
+/// not fit is the better failure; losing the rest of the UI is not.
 fn rows_per_column(cores: usize, width: u16) -> usize {
     let items = cores + EXTRA_METERS;
     let fits = ((width + METER_GAP) / (METER_WIDTH + METER_GAP)).max(1) as usize;
     let wanted = items.div_ceil(MAX_ROWS).max(1);
     let columns = wanted.min(fits);
-    items.div_ceil(columns).max(1)
+    items.div_ceil(columns).clamp(1, MAX_ROWS)
 }
 
 fn cpu_meter(index: usize, usage: &CpuUsage, palette: &Palette) -> Element {
@@ -252,4 +263,31 @@ pub fn height(cores: usize, width: u16) -> u16 {
     // one short column.
     let items = cores + EXTRA_METERS;
     (rows.min(items) + 1) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_narrow_pane_caps_the_rows_instead_of_growing_the_header() {
+        // 32 cores in a pane too narrow for a second column previously
+        // wanted 34 rows.
+        assert!(rows_per_column(32, 50) <= MAX_ROWS);
+        assert!(rows_per_column(256, 20) <= MAX_ROWS);
+    }
+
+    #[test]
+    fn a_wide_pane_still_spreads_meters_across_columns() {
+        // 34 items over 4 columns is 9 rows, the cap exactly.
+        assert_eq!(rows_per_column(32, 200), 9);
+        // A small machine keeps a single short column.
+        assert_eq!(rows_per_column(2, 200), 4);
+    }
+
+    #[test]
+    fn always_reports_at_least_one_row() {
+        assert_eq!(rows_per_column(0, 0), 2, "memory and swap still show");
+        assert!(rows_per_column(1, 1) >= 1);
+    }
 }
