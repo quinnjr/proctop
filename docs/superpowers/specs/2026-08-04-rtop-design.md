@@ -44,20 +44,27 @@ finding problems, and it does not block on upstream fixes.
 
 ## 1. Crate layout
 
-A two-crate Cargo workspace:
+A single crate, split by module rather than by crate boundary:
 
-| Crate | Responsibility | Depends on |
-|---|---|---|
-| `rtop-core` | Sampling, delta math, sorting, filtering, process actions | `procfs`, `serde` — **no TUI dependency** |
-| `rtop` | ntui components, layout, keybindings, config loading | `ntui`, `rtop-core`, `toml`, `clap` |
+| Module | Responsibility |
+|---|---|
+| `model` | Shared types: `Proc`, `Sample`, `CpuTimes`, `MemInfo`, `LoadAvg` |
+| `sample::*` | Parsers, one per `/proc` file — pure `&str` in, types out |
+| `sampler` | The only module that performs I/O; walks `/proc` and feeds the parsers |
+| `delta` | Rate derivation from consecutive readings |
+| `sort`, `format` | Pure comparators and display formatting |
+| `ui::*` | ntui components, keybindings, layout |
 
-The split exists because process accounting is where the subtle bugs live:
-jiffy diffs against a moving clock, PID reuse, counter wraparound, units
-that differ per-field. That logic must be testable without a terminal, and
-`rtop-core` makes it so.
+The important boundary is not between crates but between *parsing* and
+*reading*. Process accounting is where the subtle bugs live — jiffy diffs
+against a moving clock, PID reuse, counter wraparound, units that differ
+per field — and it must be testable without a terminal or a live machine.
+Every parser therefore takes a `&str` rather than a path, so the file read
+is a separate, thin layer confined to `sampler`.
 
-The boundary is one-directional and narrow: `rtop-core` exposes types and
-pure functions; it never knows a UI exists. `rtop` never parses `/proc`.
+A two-crate workspace was considered and rejected as ceremony: the
+`&str`-in parser convention already buys the testability, and nothing else
+in the split was carrying weight.
 
 ## 2. Sampling architecture
 
@@ -107,26 +114,28 @@ that tick rather than propagating a nonsense rate.
 **`Arc<Sample>` in state.** A re-render clones a pointer. A 500-process
 snapshot is never deep-copied on the render path.
 
-### `rtop-core` module map
+### Sampling module map
 
 | Module | Contents |
 |---|---|
-| `model.rs` | `Snapshot`, `Sample`, `Proc`, `CpuTimes`, `MemInfo`, `DiskStat`, `NetStat`, `Sensor` |
-| `sample/cpu.rs` | `/proc/stat` → per-core and aggregate jiffy counters |
-| `sample/mem.rs` | `/proc/meminfo` → total/used/buffers/cached/swap |
-| `sample/proc.rs` | `/proc/[pid]/{stat,statm,status,cmdline,io}` → `Proc` |
-| `sample/disk.rs` | `/proc/diskstats` → per-device sector counters |
-| `sample/net.rs` | `/proc/net/dev` → per-interface byte/packet counters |
-| `sample/sensors.rs` | `/sys/class/hwmon`, `/sys/class/power_supply` |
-| `delta.rs` | `(prev, cur) → Sample`; all rate derivation |
-| `sort.rs` | Pure comparators over `&[Proc]`, one per sortable column |
-| `filter.rs` | Substring, user, and state predicates |
-| `tree.rs` | Parent/child forest construction from PPID |
-| `actions.rs` | `kill(pid, signal)`, `renice(pid, nice)` — the only mutating operations |
+| `model` | `Sample`, `Proc`, `ProcRow`, `ProcKey`, `CpuTimes`, `MemInfo`, `LoadAvg` |
+| `sample::cpu` | `/proc/stat` → per-core and aggregate jiffy counters |
+| `sample::memory` | `/proc/meminfo` → total/free/buffers/cached/swap |
+| `sample::process` | `/proc/[pid]/{stat,status}` → `Proc` |
+| `sample::system` | `/proc/loadavg`, `/proc/uptime` |
+| `sample::users` | `/etc/passwd` → uid to username |
+| `sample::disk` | `/proc/diskstats` → per-device sector counters *(phase 5)* |
+| `sample::net` | `/proc/net/dev` → per-interface byte counters *(phase 5)* |
+| `sample::sensors` | `/sys/class/hwmon`, `/sys/class/power_supply` *(phase 6)* |
+| `delta` | `(prev, cur) → Sample`; all rate derivation |
+| `sort` | Pure comparators, one per sortable column |
+| `filter` | Substring, user, and state predicates *(phase 3)* |
+| `tree` | Parent/child forest construction from PPID *(phase 3)* |
+| `actions` | `kill(pid, signal)`, `renice(pid, nice)` *(phase 3)* |
 
-Each `sample/*` module parses from a `&str`, not from a path. The reader
-that supplies the string is a thin, separately-tested layer. This is what
-makes fixture-driven testing possible.
+Each `sample::*` module parses from a `&str`, not from a path. The reader
+that supplies the string lives in `sampler` and is exercised separately.
+This is what makes fixture-driven testing possible.
 
 ## 3. The process table
 
@@ -168,18 +177,39 @@ produce the wrong abstraction. rtop builds it locally first.
 ### Upstream feedback loop
 
 Every `ntui` limitation rtop works around is filed as an issue on
-`quinnjr/ntui`, with the rtop workaround referenced. Known candidates
-already identified:
+`quinnjr/ntui`, with the rtop workaround referenced. Found so far, in
+descending order of how much they cost:
 
-1. Selectable / focusable table with a controlled selected index
-2. Virtualized list or table that lays out only the visible window
-3. Per-cell (or row-callback) styling
-4. A `use_list_selection`-style hook: cursor, clamping, page movement
-5. `Theme` extension or escape hatch — the built-in `Theme` carries eight
-   tokens (`accent`, `surface`, `border`, `muted`, `foreground`, `danger`,
-   `success`, `border_style`), which is not enough for htop-style meters
-   that need distinct colors for user / system / nice / irq / iowait
-   segments plus per-core variation
+1. **`props_eq` deep-compares large payloads.** ntui decides whether to
+   re-render a subtree by comparing props with `PartialEq`, and
+   `Arc<T>`'s own `PartialEq` compares the pointees. Passing the process
+   list down as `Arc<Vec<ProcRow>>` therefore deep-compares several hundred
+   processes every frame — more expensive than the render it is trying to
+   skip. rtop works around it with `ui::Shared<T>`, a newtype whose
+   `PartialEq` is `Arc::ptr_eq`. ntui may want either an identity-comparing
+   wrapper of its own or a way for a component to opt out of `props_eq`.
+2. **Selectable / focusable table** with a controlled selected index.
+3. **Virtualized list or table** that lays out only the visible window.
+4. **Per-cell (or row-callback) styling.**
+5. **`TestTerminal::frame_text` carries no styling.** The frame comes back
+   as plain text, so nothing about color, weight, or background can be
+   asserted — which means the selected-row highlight, the sort-column
+   marker, and the CPU threshold colors are all untestable through the
+   harness. A styled-cell accessor (or a snapshot format that encodes
+   attributes) would close this.
+6. **A component's `render` cannot be called from a test**, because
+   `Hooks` is not constructible outside the crate. rtop splits
+   `ProcessTable::build(&props) -> Element` out from `Component::render` so
+   its output tree can be inspected directly — which is the only way to
+   assert that offscreen rows are never *built*, as opposed to built and
+   then clipped. Something like a `Hooks::detached()` for hook-free
+   components would remove the need for the split.
+7. **A `use_list_selection`-style hook**: cursor, clamping, page movement.
+8. **`Theme` extension or escape hatch** — the built-in `Theme` carries
+   eight tokens (`accent`, `surface`, `border`, `muted`, `foreground`,
+   `danger`, `success`, `border_style`), which is not enough for htop-style
+   meters needing distinct colors for user / system / nice / irq / iowait
+   segments at once. rtop carries its own palette in `ui::theme`.
 
 Once a workaround has proven its shape in rtop, it is a candidate to
 promote into `ntui`. Promotion is a separate decision made per item, not an
@@ -217,8 +247,10 @@ memory, but they are not the design center.
 | Key | Action |
 |---|---|
 | `j` / `k`, `↓` / `↑` | Move selection |
-| `gg` / `G` | Top / bottom |
+| `g` / `G`, `Home` / `End` | Top / bottom |
 | `C-d` / `C-u` | Half-page down / up |
+| `PgDn` / `PgUp` | Full page down / up |
+| `I` | Reverse the sort direction |
 | `/` | Incremental filter; `n` / `N` cycle matches |
 | `:` | Command line — `:sort cpu`, `:tree`, `:kill`, `:q` |
 | `dd` | Kill selected process (confirmation modal) |
@@ -234,7 +266,13 @@ memory, but they are not the design center.
 `dd` rather than `k` for kill is deliberate: `k` is navigation, and binding
 a destructive action to a navigation key in a list you are actively
 scrolling is a footgun. `dd` reads as vim's delete and requires two
-keystrokes plus a confirmation.
+keystrokes plus a confirmation. Half-page movement is `C-d`/`C-u` rather
+than bare `d`/`u` for the same reason — `d` belongs to `dd`, and `u` to
+filter-by-user.
+
+`g` is bound directly rather than as `gg`, since there is no other `g`
+prefix yet to disambiguate against. It becomes a pending-prefix state if
+one appears.
 
 ## 6. Error handling
 
@@ -259,11 +297,12 @@ and the sampler task must be panic-free by construction.
 
 ## 7. Testing
 
-**`rtop-core` — fixture-driven.** Real `/proc` file contents are captured
-and checked into `rtop-core/tests/fixtures/`. Parsers are tested against
-those strings, so tests are deterministic, run on any machine, and can
-cover cases that are hard to produce live (a zombie process, a
-2000-character cmdline, a missing `io` file, a counter mid-wraparound).
+**Parsers — fixture-driven.** Real `/proc` file contents are captured and
+checked into `tests/fixtures/`. Parsers are tested against those strings,
+so tests are deterministic, run on any machine, and can cover cases that
+are hard to produce live (a process named `weird)name`, a kernel that
+stops before the guest columns, a machine with no swap, a counter
+mid-wraparound).
 
 **Delta math — hand-computed expectations.** Two fixture snapshots with
 known timestamps and known jiffy counts, asserted against percentages
@@ -273,24 +312,30 @@ correctness bug, and it gets the most direct tests.
 **Sort and filter — property tests.** Sorting is a total order; filtering
 is a subset of the input; neither loses or duplicates a process.
 
-**`rtop` — snapshot tests via `TestTerminal`.** `ntui` ships a headless
-test harness (`ntui::testing::TestTerminal`). Each component renders at
-fixed terminal sizes against a fixed `Sample` fixture, and its output is
-snapshot-asserted. This also exercises `ntui`'s own test harness under
-realistic load, which is itself useful dogfooding.
+**Components — rendered via `TestTerminal`.** `ntui` ships a headless test
+harness. Each component renders at fixed terminal sizes against a fixed
+`Sample` fixture and its text output is asserted. Where the property is
+structural rather than visual — offscreen rows never being built — the
+test inspects the `Element` tree from `ProcessTable::build` instead, since
+a rendered frame cannot distinguish "not built" from "built then clipped".
 
-**No test reads the live system** except one integration test, gated behind
-a feature flag, that samples the real machine once and asserts only that it
-returns without error and finds at least one process.
+**Live-system tests are confined to two files**, `tests/sampler.rs` and
+`tests/app.rs`, both `#![cfg(target_os = "linux")]`. They assert on wiring
+rather than on any particular figure: that the sampler finds the process
+doing the sampling, that percentages land in range, that the app mounts and
+quits. Sampling runs on `spawn_blocking`, so whether it has landed after a
+given tick is a race; these tests poll rather than assume.
 
-**Performance budget, enforced by benchmark.** Criterion benches in
-`rtop-core` for a full sample of a synthetic 500-process fixture. Targets:
+**Performance budget.** `examples/bench.rs` times a full sample so the
+figure can be re-measured whenever the sampler changes. Targets:
 
 - Under 1% of one core, averaged, at a 1500 ms refresh with 500 processes
 - Under 5 ms per frame render
 
-These are targets to measure against, not assertions that fail CI on a
-noisy machine.
+**Measured on 2026-08-04**, 782 processes, release build: **6.0 ms per
+sample, a 0.40% duty cycle** at the 1500 ms refresh. Within budget with
+room to spare. These are targets to measure against, not assertions that
+fail CI on a noisy machine.
 
 ## 8. Configuration
 
@@ -324,8 +369,8 @@ using.
 
 | # | Phase | Done when |
 |---|---|---|
-| 1 | `rtop-core` sampler, `Sample`, deltas | Fixture tests pass; benches run. No UI exists. |
-| 2 | Header meters + `ProcessTable` + sort + scroll | **rtop is usable as a monitor.** |
+| 1 | ✅ Sampler, `Sample`, deltas | Fixture tests pass; benches run. No UI exists. |
+| 2 | ✅ Header meters + `ProcessTable` + sort + scroll | **rtop is usable as a monitor.** |
 | 3 | Search, command line, help overlay, kill, renice | Full process interaction. |
 | 4 | Detail pane | Per-process drill-down. |
 | 5 | I/O tab | Disk and network throughput with sparklines. |
@@ -343,15 +388,16 @@ whether it earns its complexity.
 
 ## Dependencies
 
-| Crate | Version | Purpose |
-|---|---|---|
-| `ntui` | 0.2 | TUI framework |
-| `procfs` | 0.18 | Typed `/proc` access |
-| `tokio` | 1 | Async runtime (required by `ntui`) |
-| `serde` | 1 | Config and theme deserialization |
-| `toml` | 1 | Config format |
-| `clap` | 4 | CLI flags |
-| `criterion` | dev | Benchmarks |
+| Crate | Version | Purpose | Phase |
+|---|---|---|---|
+| `ntui` | 0.2 | TUI framework | 2 |
+| `procfs` | 0.18 | Page size, and typed `/proc` access where useful | 1 |
+| `tokio` | 1 | Async runtime (required by `ntui`) | 2 |
+| `serde` | 1 | Config and theme deserialization | 7 |
+| `toml` | 1 | Config format | 7 |
+| `clap` | 4 | CLI flags | 7 |
 
-`hwmon` and `/sys` reads in phase 6 use `std::fs` directly; `procfs` does
-not cover `/sys/class/hwmon`.
+`procfs` earns its place for `page_size()` and for the phase 5–6 readers;
+the hot-path parsers are hand-written against `&str` because that is what
+makes them fixture-testable. `/sys/class/hwmon` in phase 6 uses `std::fs`
+directly — `procfs` does not cover `/sys`.

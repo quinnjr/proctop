@@ -53,8 +53,8 @@ fn returns_none_when_the_total_is_missing() {
 
 #[test]
 fn treats_a_machine_without_swap_as_zero_rather_than_missing() {
-    let mem = memory::parse_meminfo("MemTotal: 100 kB\nMemFree: 50 kB\n")
-        .expect("swap is optional");
+    let mem =
+        memory::parse_meminfo("MemTotal: 100 kB\nMemFree: 50 kB\n").expect("swap is optional");
 
     assert_eq!(mem.swap_total, 0);
     assert_eq!(mem.swap_used(), 0);

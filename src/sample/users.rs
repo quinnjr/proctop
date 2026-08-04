@@ -35,8 +35,7 @@ pub fn parse_passwd(text: &str) -> UserTable {
 
     for line in text.lines() {
         let mut fields = line.split(':');
-        let (Some(name), Some(_passwd), Some(uid)) =
-            (fields.next(), fields.next(), fields.next())
+        let (Some(name), Some(_passwd), Some(uid)) = (fields.next(), fields.next(), fields.next())
         else {
             continue;
         };

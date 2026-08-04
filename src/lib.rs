@@ -6,7 +6,9 @@
 //! fixture text rather than the live system.
 
 pub mod delta;
+pub mod format;
 pub mod model;
 pub mod sample;
 pub mod sampler;
 pub mod sort;
+pub mod ui;

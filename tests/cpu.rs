@@ -22,7 +22,11 @@ fn parses_aggregate_cpu_times_from_proc_stat() {
 fn parses_one_entry_per_core_in_kernel_order() {
     let stat = cpu::parse_stat(PROC_STAT).expect("fixture should parse");
 
-    assert_eq!(stat.cores.len(), 32, "fixture was captured on a 32-core box");
+    assert_eq!(
+        stat.cores.len(),
+        32,
+        "fixture was captured on a 32-core box"
+    );
 
     // cpu0 10398 633 2322 24773 5029 316 481 0 0 0
     assert_eq!(stat.cores[0].user, 10_398);

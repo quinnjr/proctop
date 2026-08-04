@@ -109,8 +109,7 @@ pub fn cpu_usage(prev: &CpuTimes, cur: &CpuTimes) -> CpuUsage {
     };
 
     let (prev, cur) = (split(prev), split(cur));
-    let deltas: [u64; 10] =
-        std::array::from_fn(|i| cur[i].saturating_sub(prev[i]));
+    let deltas: [u64; 10] = std::array::from_fn(|i| cur[i].saturating_sub(prev[i]));
 
     let total: u64 = deltas.iter().sum();
     if total == 0 {

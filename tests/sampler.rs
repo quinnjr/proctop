@@ -14,8 +14,14 @@ fn samples_the_running_machine() {
     let sample = sampler.sample();
 
     assert!(sample.mem.total > 0, "the machine has memory");
-    assert!(!sample.cores.is_empty(), "the machine has at least one core");
-    assert!(sample.procs.len() > 1, "at least this test process is running");
+    assert!(
+        !sample.cores.is_empty(),
+        "the machine has at least one core"
+    );
+    assert!(
+        sample.procs.len() > 1,
+        "at least this test process is running"
+    );
 }
 
 #[test]
