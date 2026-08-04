@@ -171,6 +171,7 @@ impl Sampler {
 
             procs.push(ProcRow {
                 user: self.username(uid),
+                uid,
                 proc,
                 cpu,
                 mem: mem_fraction,
@@ -517,17 +518,6 @@ fn socket_owners(wanted: &HashSet<u64>) -> HashMap<u64, (i32, std::sync::Arc<str
     }
 
     owners
-}
-
-/// This process's effective uid, read once.
-///
-/// The Network tab uses it to tell "another user owns this, become root"
-/// apart from "the owner exited between the two reads" — the second is
-/// routine and no privilege fixes it.
-pub fn our_euid() -> u32 {
-    // SAFETY: `geteuid` takes no arguments, cannot fail, and returns a
-    // plain integer.
-    unsafe { libc::geteuid() }
 }
 
 /// The uid owning `/proc/<pid>`, which is the process's **effective** uid.

@@ -10,6 +10,7 @@ fn row(pid: i32, name: &str, user: &str, state: ProcState) -> ProcRow {
             ..Proc::default()
         },
         user: user.into(),
+        uid: Some(1000),
         ..ProcRow::default()
     }
 }

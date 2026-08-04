@@ -1,4 +1,4 @@
-//! The only operations that change the system.
+//! The operations that change the system, and the rules about who may.
 //!
 //! Everything here is guarded against the PID values that mean something
 //! other than "one process": `kill(0, ..)` signals the caller's entire
@@ -59,6 +59,46 @@ impl Signal {
 /// The lowest and highest nice values the kernel accepts.
 pub const NICE_MIN: i32 = -20;
 pub const NICE_MAX: i32 = 19;
+
+/// This process's effective uid.
+///
+/// The permission questions all reduce to comparing this against a target's
+/// owner, so it is read here rather than threaded through the UI.
+pub fn our_euid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, cannot fail, and returns a
+    // plain integer.
+    unsafe { libc::geteuid() }
+}
+
+/// Whether `ours` would be permitted to signal a process owned by `owner`.
+///
+/// A **hint for the interface, never a gate.** The kernel's rule is richer
+/// than this: it compares the sender's real or effective uid against the
+/// target's real *or saved-set* uid, and the saved-set uid is not visible
+/// in `/proc/<pid>` ownership, which reports the effective one. A process
+/// that dropped privileges from your account is signalable by you and looks
+/// foreign here.
+///
+/// So this is used to warn before a confirmation, and the syscall stays the
+/// authority. An unknown owner — `None`, from a `/proc` we could not stat —
+/// is treated as permitted, because discouraging someone from trying is
+/// worse than letting the kernel answer.
+pub fn may_signal(owner: Option<u32>, ours: u32) -> bool {
+    // uid 0 carries CAP_KILL, so ownership does not enter into it.
+    ours == 0 || owner.is_none_or(|uid| uid == ours)
+}
+
+/// Restate an action failure in terms of what the user can do about it.
+///
+/// `EPERM` reaches here as "Operation not permitted", which is accurate and
+/// useless: it does not say that the process belongs to someone else, nor
+/// that root is the remedy.
+pub fn explain(err: &io::Error) -> String {
+    if err.kind() == io::ErrorKind::PermissionDenied {
+        return "not permitted — run proctop as root".to_string();
+    }
+    err.to_string()
+}
 
 /// Check that a process exists and that we would be permitted to signal it,
 /// without delivering anything.

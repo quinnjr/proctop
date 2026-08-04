@@ -58,6 +58,13 @@ mean the same thing in the config file, in `--sort`, and in `:sort`.
 a destructive action to a navigation key in a list you are actively
 scrolling is a footgun.
 
+Signalling and renicing follow the kernel's rules, not proctop's: your own
+processes always, anything on the machine when run as root, `EPERM`
+otherwise. The kill dialog says so before you confirm rather than after —
+though it is a warning, not a refusal, because `/proc` shows a process's
+effective uid while the kernel will also accept a match against its
+saved-set uid. The syscall stays the authority.
+
 ## What it measures
 
 **Processes** — per-core CPU with the segments broken out, memory and swap,

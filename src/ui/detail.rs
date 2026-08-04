@@ -109,6 +109,12 @@ fn state_name(p: &crate::model::Proc) -> &'static str {
 pub struct KillProps {
     pub pid: i32,
     pub name: String,
+    /// The owning username, when the signal is expected to be refused.
+    ///
+    /// `None` covers both "we own it" and "we are root", because neither
+    /// needs a warning. It is a hint rather than a verdict — see
+    /// [`crate::actions::may_signal`] — so the signals stay on offer.
+    pub owner: Option<String>,
     /// Index into [`SIGNALS`].
     pub index: usize,
     /// Whether the process is still in the latest sample. A dialog can sit
@@ -125,15 +131,25 @@ impl Component for Kill {
 
     fn render(props: &KillProps, _hooks: &mut Hooks) -> Element {
         let palette = &props.palette;
-        let mut body = vec![
-            overlay::row(
-                format!("{} (pid {})", props.name, props.pid),
-                palette.text,
-                Weight::Bold,
+        let mut body = vec![overlay::row(
+            format!("{} (pid {})", props.name, props.pid),
+            palette.text,
+            Weight::Bold,
+            palette,
+        )];
+
+        // Directly under the process line it describes, sharing the blank
+        // below it: a separator of its own would make this dialog two rows
+        // taller than the others and raise the terminal height it needs.
+        if let Some(owner) = &props.owner {
+            body.push(overlay::row(
+                format!("Owned by {owner} — run proctop as root to signal it."),
+                palette.warn,
+                Weight::Normal,
                 palette,
-            ),
-            overlay::row("", palette.text, Weight::Normal, palette),
-        ];
+            ));
+        }
+        body.push(overlay::row("", palette.text, Weight::Normal, palette));
 
         if !props.alive {
             body.push(overlay::row(

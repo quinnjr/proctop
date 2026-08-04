@@ -22,6 +22,7 @@ fn rows(n: usize) -> Vec<ProcRow> {
                 ..Proc::default()
             },
             user: if i % 2 == 0 { "root" } else { "joseph" }.into(),
+            uid: Some(1000),
             ..ProcRow::default()
         })
         .collect()

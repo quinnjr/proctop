@@ -21,6 +21,7 @@ fn rows(n: usize) -> Vec<ProcRow> {
             cpu: 0.0,
             mem: 0.01,
             user: "joseph".into(),
+            uid: Some(1000),
             depth: 0,
         })
         .collect()
@@ -619,4 +620,62 @@ fn the_attribution_footer_appears_only_when_a_row_is_unattributed() {
 
     let two_unknown = render(vec![socket(80, false), socket(443, false)]);
     assert!(two_unknown.contains("2 sockets "), "plural:\n{two_unknown}");
+}
+
+// ---------- signalling another user's process ----------
+
+use proctop::ui::detail::{Kill, KillProps};
+
+fn kill_dialog(owner: Option<&str>) -> String {
+    TestTerminal::new(
+        70,
+        18,
+        element!(Kill(
+            pid: 1i32,
+            name: "systemd".to_string(),
+            index: 0usize,
+            alive: true,
+            owner: owner.map(|o| o.to_string()),
+            palette: Palette::default(),
+        )),
+    )
+    .expect("should render")
+    .frame_text()
+}
+
+#[test]
+fn the_kill_dialog_warns_before_a_signal_that_cannot_land() {
+    // The kernel answers this, not proctop — but finding out by confirming
+    // and reading "Operation not permitted" is a bad way to learn it.
+    let text = kill_dialog(Some("root"));
+
+    assert!(text.contains("root"), "should name the owner:\n{text}");
+    assert!(
+        text.to_lowercase().contains("root to signal") || text.contains("needs root"),
+        "should say what would fix it:\n{text}"
+    );
+}
+
+#[test]
+fn the_warning_does_not_remove_the_signals() {
+    // The hint is a guess: `/proc` shows the effective uid, while the kernel
+    // also accepts a match against the saved-set uid. Refusing to offer the
+    // signal would block kills that would in fact succeed.
+    let text = kill_dialog(Some("root"));
+
+    for signal in ["SIGTERM", "SIGKILL"] {
+        assert!(
+            text.contains(signal),
+            "{signal} should still be offered:\n{text}"
+        );
+    }
+    assert!(text.contains("Enter send"), "still sendable:\n{text}");
+}
+
+#[test]
+fn no_warning_for_a_process_we_own() {
+    let text = kill_dialog(None);
+
+    assert!(!text.contains("Owned by"), "no warning expected:\n{text}");
+    assert!(text.contains("SIGTERM"));
 }

@@ -110,6 +110,11 @@ tick is a race — the live tests poll (`tick_until`) rather than assume.
 
 Most of these are here because something already went wrong.
 
+- **Signalling permission is the kernel's to decide, never proctop's.**
+  `actions::may_signal` exists to warn in the kill dialog and nothing else:
+  `/proc` reports a process's *effective* uid, while `kill(2)` also accepts
+  a match against its *saved-set* uid, which is invisible here. Gating the
+  action on the hint would refuse kills that would in fact succeed.
 - **Process identity is `(pid, starttime)`, never a bare pid.** Linux
   recycles PIDs. This applies to deltas *and* to destructive actions:
   `actions::kill_if_unchanged` / `renice_if_unchanged` re-verify before

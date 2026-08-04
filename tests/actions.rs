@@ -149,3 +149,49 @@ fn distinguishes_a_process_it_cannot_read_from_one_that_exited() {
     assert!(err.to_string().contains("exited"), "{err}");
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
 }
+
+// ---------- who may signal what ----------
+
+#[test]
+fn root_may_signal_anything() {
+    // uid 0 has CAP_KILL, so ownership does not enter into it.
+    assert!(actions::may_signal(Some(1000), 0));
+    assert!(actions::may_signal(Some(0), 0));
+    assert!(actions::may_signal(None, 0));
+}
+
+#[test]
+fn an_unprivileged_user_may_signal_only_their_own() {
+    assert!(actions::may_signal(Some(1000), 1000));
+    assert!(!actions::may_signal(Some(0), 1000));
+    assert!(!actions::may_signal(Some(999), 1000));
+}
+
+#[test]
+fn an_unknown_owner_is_not_presented_as_forbidden() {
+    // `/proc/<pid>` could not be stat'd — under a `hidepid` mount, say.
+    // The syscall is the authority; a guess that discourages the user from
+    // trying is worse than letting the kernel answer.
+    assert!(actions::may_signal(None, 1000));
+}
+
+#[test]
+fn a_permission_failure_says_what_would_fix_it() {
+    // "Operation not permitted" is the kernel's phrasing and tells a user
+    // nothing about what to do next.
+    let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    let message = actions::explain(&denied);
+
+    assert!(
+        message.contains("root"),
+        "should name the remedy: {message}"
+    );
+    assert!(
+        !message.contains("Operation not permitted"),
+        "should replace the errno text, not append to it: {message}"
+    );
+
+    // Everything else keeps the operating system's own words.
+    let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "process 1 exited");
+    assert_eq!(actions::explain(&gone), "process 1 exited");
+}

@@ -200,7 +200,9 @@ impl Component for App {
                         next.notice =
                             Some(match actions::kill_if_unchanged(pid, starttime, signal) {
                                 Ok(()) => format!("sent {} to {pid}", signal.label()),
-                                Err(e) => format!("{} to {pid}: {e}", signal.label()),
+                                Err(e) => {
+                                    format!("{} to {pid}: {}", signal.label(), actions::explain(&e))
+                                }
                             });
                     }
                     Effect::Renice {
@@ -211,7 +213,7 @@ impl Component for App {
                         next.notice =
                             Some(match actions::renice_if_unchanged(pid, starttime, nice) {
                                 Ok(()) => format!("reniced {pid} to {nice}"),
-                                Err(e) => format!("renice {pid}: {e}"),
+                                Err(e) => format!("renice {pid}: {}", actions::explain(&e)),
                             });
                     }
                 }
@@ -304,13 +306,17 @@ fn overlay_element(state: &UiState, procs: &[ProcRow], palette: &Palette) -> Opt
             pid: key.pid,
             palette: *palette,
         ))),
-        Overlay::Kill { key, name, index } => Some(element!(Kill(
-            pid: key.pid,
-            name: name.clone(),
-            index: *index,
-            alive: find(procs, *key).is_some(),
-            palette: *palette,
-        ))),
+        Overlay::Kill { key, name, index } => {
+            let row = find(procs, *key);
+            Some(element!(Kill(
+                pid: key.pid,
+                name: name.clone(),
+                index: *index,
+                alive: row.is_some(),
+                owner: row.as_ref().and_then(foreign_owner),
+                palette: *palette,
+            )))
+        }
         Overlay::Renice { key, name, input } => Some(element!(Renice(
             pid: key.pid,
             name: name.clone(),
@@ -324,6 +330,13 @@ fn overlay_element(state: &UiState, procs: &[ProcRow], palette: &Palette) -> Opt
 /// The row for a process identity, if it is still in the sample.
 fn find(procs: &[ProcRow], key: crate::model::ProcKey) -> Option<ProcRow> {
     procs.iter().find(|r| r.proc.key() == key).cloned()
+}
+
+/// The owner to warn about, or `None` when no warning is warranted.
+///
+/// `None` covers both "ours" and "we are root" — neither needs saying.
+fn foreign_owner(row: &ProcRow) -> Option<String> {
+    (!actions::may_signal(row.uid, actions::our_euid())).then(|| row.user.to_string())
 }
 
 fn tab_bar(state: &UiState, palette: &Palette) -> Element {

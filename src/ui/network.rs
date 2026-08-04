@@ -149,7 +149,7 @@ fn listening(props: &NetworkViewProps, available: usize) -> Vec<Element> {
 
     if unattributed > 0 {
         rows.push(placeholder(
-            &attribution_note(unattributed, sockets, crate::sampler::our_euid()),
+            &attribution_note(unattributed, sockets, crate::actions::our_euid()),
             palette.muted,
         ));
     }
