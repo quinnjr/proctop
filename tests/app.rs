@@ -152,8 +152,17 @@ async fn switches_to_the_disk_tab() {
     let text = t.frame_text();
     assert!(text.contains("Disks"), "{text}");
     assert!(text.contains("DEVICE"), "{text}");
-    // Network throughput moved to its own tab.
+    // Network throughput moved to its own tab. Checking for "Interfaces"
+    // alone was not enough: the stale section was titled "Network", so the
+    // assertion passed while the rows it forbids were on screen. Matched on
+    // the section shape rather than on "RX"/"TX", which are two letters
+    // that could appear in a real device name.
     assert!(!text.contains("Interfaces"), "{text}");
+    assert_eq!(
+        text.matches("READ").count(),
+        1,
+        "exactly one section, and it is the disks one:\n{text}"
+    );
 }
 
 #[tokio::test]
@@ -375,5 +384,46 @@ async fn an_open_dialog_is_opaque_over_the_process_table() {
     assert_eq!(
         cell.bg, palette.panel_bg,
         "the panel must paint its own background, not let the table show through"
+    );
+}
+
+#[tokio::test]
+async fn scrolling_the_process_list_does_not_scroll_the_sockets_away() {
+    // Held for the duration so the machine is guaranteed to have at least
+    // one listener: without it this fails on a container with no services,
+    // pointing at the wrong thing.
+    let _listener = std::net::TcpListener::bind("127.0.0.1:0").expect("should bind");
+
+    // The two lists shared one cursor. Scrolling processes to row 30 and
+    // then pressing 3 left the listening section rendering an empty body
+    // under its header, with no key on that tab able to bring it back.
+    let mut t = sampled().await;
+
+    // `G`, not thirty `j`s: the process cursor has to end up past the end
+    // of the socket list for the shared-cursor bug to show, and a machine
+    // has hundreds of processes against dozens of sockets.
+    t.send_key(KeyCode::Char('G')).expect("should accept input");
+
+    t.send_key(KeyCode::Char('3')).expect("should accept input");
+    // Wait for the read to finish, not for the header to appear: the header
+    // is on the first frame, before any socket has been read. The notice
+    // clears as soon as `sockets` is `Some`, which happens whether or not
+    // the rows then render — so this condition cannot mask the defect.
+    let text = tick_until(&mut t, |text| !text.contains("reading sockets")).await;
+
+    // Count actual socket rows, not "lines below the header" — the tab bar
+    // and status bar are lines below the header too, which made a first
+    // draft of this test pass with the bug still in place.
+    assert!(text.contains("Listening"), "{text}");
+    let socket_rows = text
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("tcp") || line.starts_with("udp")
+        })
+        .count();
+    assert!(
+        socket_rows > 0,
+        "the listening list rendered no socket rows:\n{text}"
     );
 }

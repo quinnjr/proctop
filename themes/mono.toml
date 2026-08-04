@@ -8,7 +8,6 @@ cpu_irq    = "darkgrey"
 cpu_iowait = "darkgrey"
 
 mem_used  = "white"
-mem_cache = "darkgrey"
 swap      = "white"
 
 label     = "white"

@@ -79,12 +79,6 @@ impl Component for Help {
     type Props = HelpProps;
 
     fn render(props: &HelpProps, _hooks: &mut Hooks) -> Element {
-        Help::render_tree(props)
-    }
-}
-
-impl Help {
-    fn render_tree(props: &HelpProps) -> Element {
         let palette = &props.palette;
         let body = BINDINGS
             .iter()

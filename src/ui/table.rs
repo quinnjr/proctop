@@ -121,20 +121,13 @@ pub struct ProcessTable;
 impl Component for ProcessTable {
     type Props = ProcessTableProps;
 
-    fn render(props: &ProcessTableProps, _hooks: &mut Hooks) -> Element {
-        ProcessTable::render_tree(props)
-    }
-}
-
-impl ProcessTable {
-    /// The table's output as a pure function of its props.
+    /// Slices to the visible window *before* building any row, so offscreen
+    /// rows are never constructed at all.
     ///
-    /// Exposed separately from `Component::render` because a `Hooks` cannot
-    /// be constructed outside ntui, and the property worth testing here —
-    /// that offscreen rows are never built at all — is invisible in a
-    /// rendered frame, where "never built" and "built then clipped" look
-    /// identical.
-    fn render_tree(props: &ProcessTableProps) -> Element {
+    /// `builds_only_the_rows_that_are_visible` in `tests/components.rs`
+    /// counts the elements built rather than reading a frame, because a
+    /// frame cannot tell "never built" from "built then clipped".
+    fn render(props: &ProcessTableProps, _hooks: &mut Hooks) -> Element {
         let window = props
             .selection
             .visible(props.rows.len(), props.height as usize);

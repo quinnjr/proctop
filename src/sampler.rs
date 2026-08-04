@@ -85,6 +85,13 @@ impl Sampler {
     /// for every rate, because there is no previous reading to diff against
     /// and inventing a figure would be worse than showing none.
     ///
+    /// A tick whose `/proc/stat` read fails reports every core and every
+    /// process at zero for that frame, and both baselines stay put so the
+    /// next successful tick is correct rather than doubled. Nothing on
+    /// screen says the reading is stale — acceptable because the file is
+    /// present on every Linux, and a permanent failure means a `/proc` that
+    /// has been masked deliberately.
+    ///
     /// Which subsystems report unreadability as such is a deliberate line.
     /// `disks`, `nets`, and `sensors` are `Option`, because a restricted
     /// container or a machine with no `hwmon` can legitimately deny them and
@@ -97,10 +104,11 @@ impl Sampler {
         // zeroed reading makes the next tick diff a real counter against
         // zero, which reports the machine's since-boot average as if it
         // were this interval, and drops every per-core meter for a frame.
-        let cpu_stat = match cpu::parse_stat(&read("/proc/stat")) {
-            Some(stat) => stat,
-            None => self.prev_cpu.clone().unwrap_or_default(),
-        };
+        let fresh_stat = cpu::parse_stat(&read("/proc/stat"));
+        let cpu_stat = fresh_stat
+            .clone()
+            .or_else(|| self.prev_cpu.clone())
+            .unwrap_or_default();
 
         let (aggregate, cores, elapsed) = match &self.prev_cpu {
             Some(prev) => (
@@ -170,18 +178,15 @@ impl Sampler {
             });
         }
 
-        // `None` distinguishes "could not read the file" from "read it and
-        // there is nothing there" — the same distinction `sensors` makes,
-        // and for the same reason: a restricted container reporting its
-        // disks as idle rather than as unavailable is a lie.
+        // `None` is "could not read", not "read it and nothing is moving" —
+        // see the `Sample` field docs for why the two must not collapse.
         let disks = read_optional("/proc/diskstats").map(|t| disk::parse_diskstats(&t));
         let nets = read_optional("/proc/net/dev").map(|t| net::parse_netdev(&t));
         let now = Instant::now();
         let disk_rates = rates_from(&mut self.prev_disks, disks, now);
         let net_rates = rates_from(&mut self.prev_nets, nets, now);
 
-        self.prev_cpu = Some(cpu_stat);
-        self.prev_times = times;
+        self.advance_cpu_baseline(Self::baseline_input(fresh_stat, cpu_stat), times);
 
         Sample {
             cpu: aggregate,
@@ -222,6 +227,37 @@ impl Sampler {
         Some(self.sensors.clone())
     }
 
+    /// Advance both CPU baselines, or neither.
+    ///
+    /// They are one baseline in two pieces: per-process jiffies are the
+    /// numerator and the aggregate `/proc/stat` delta is the denominator,
+    /// and they only mean anything measured over the same interval.
+    /// Advancing the process times while the total stayed frozen left the
+    /// next tick dividing one interval of process time by two intervals of
+    /// elapsed jiffies — every process reporting half its true share, the
+    /// exact inverse of the doubled throughput a shared disk/net clock used
+    /// to produce.
+    ///
+    /// `None` means `/proc/stat` could not be read, which also keeps a
+    /// zeroed first reading from becoming the baseline the whole run diffs
+    /// against.
+    fn advance_cpu_baseline(&mut self, fresh: Option<CpuStat>, times: HashMap<ProcKey, u64>) {
+        if let Some(stat) = fresh {
+            self.prev_cpu = Some(stat);
+            self.prev_times = times;
+        }
+    }
+
+    /// The baseline to store, given whether this tick's `/proc/stat` read
+    /// succeeded.
+    ///
+    /// Split out so the failure branch is reachable from a test: `sample`
+    /// hard-codes `/proc` paths, so nothing else in the crate can produce
+    /// the `None` that selects it.
+    fn baseline_input(fresh: Option<CpuStat>, resolved: CpuStat) -> Option<CpuStat> {
+        fresh.map(|_| resolved)
+    }
+
     /// Sockets the machine is listening on, refreshed at most every
     /// [`SOCKET_INTERVAL`] and only while something is displaying them.
     ///
@@ -233,33 +269,54 @@ impl Sampler {
             return None;
         }
         if should_refresh(self.listening_at, now, SOCKET_INTERVAL) {
-            self.listening = Shared::new(self.read_listening());
+            // `None` when not one of the four files could be read: a
+            // restricted container or a `hidepid` mount must not be told
+            // "nothing is listening", which is a claim rather than a
+            // degraded view.
+            let read = self.read_listening()?;
+            self.listening = Shared::new(read);
             self.listening_at = Some(now);
         }
         Some(self.listening.clone())
     }
 
-    fn read_listening(&mut self) -> Vec<ListeningSocket> {
+    /// `None` when not one of the four files could be read at all.
+    ///
+    /// The v6 files are absent when IPv6 is disabled at boot, which is not
+    /// a failure — there are no v6 sockets to miss. Only a machine where
+    /// *every* file is unreadable is hiding something, and that must not
+    /// render as "nothing is listening".
+    fn read_listening(&mut self) -> Option<Vec<ListeningSocket>> {
         let mut found: Vec<Socket> = Vec::new();
+        let mut any_readable = false;
         for (path, protocol) in [
             ("/proc/net/tcp", Protocol::Tcp),
             ("/proc/net/tcp6", Protocol::Tcp6),
             ("/proc/net/udp", Protocol::Udp),
             ("/proc/net/udp6", Protocol::Udp6),
         ] {
-            found.extend(sockets::parse(&read(path), protocol));
+            let Some(text) = read_optional(path) else {
+                continue;
+            };
+            any_readable = true;
+            found.extend(sockets::parse(&text, protocol));
+        }
+        if !any_readable {
+            return None;
         }
         sockets::sort(&mut found);
 
         let owners = socket_owners();
-        found
-            .into_iter()
-            .map(|socket| ListeningSocket {
-                user: self.username(Some(socket.uid)),
-                process: owners.get(&socket.inode).cloned(),
-                socket,
-            })
-            .collect()
+        Some(
+            found
+                .into_iter()
+                .map(|socket| ListeningSocket {
+                    user: self.username(Some(socket.uid)),
+                    process: owners.get(&socket.inode).cloned(),
+                    socket,
+                })
+                .collect(),
+        )
     }
 
     /// The username for a uid, falling back to the number itself when this
@@ -451,6 +508,17 @@ fn socket_owners() -> HashMap<u64, (i32, std::sync::Arc<str>)> {
     owners
 }
 
+/// This process's effective uid, read once.
+///
+/// The Network tab uses it to tell "another user owns this, become root"
+/// apart from "the owner exited between the two reads" — the second is
+/// routine and no privilege fixes it.
+pub fn our_euid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, cannot fail, and returns a
+    // plain integer.
+    unsafe { libc::geteuid() }
+}
+
 /// The uid owning `/proc/<pid>`, which is the process's **effective** uid.
 ///
 /// Not the real uid: the kernel builds this inode's ownership from
@@ -487,6 +555,69 @@ fn pids() -> Vec<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stat(total_user: u64) -> CpuStat {
+        CpuStat {
+            total: crate::model::CpuTimes {
+                user: total_user,
+                ..Default::default()
+            },
+            cores: Vec::new(),
+        }
+    }
+
+    fn times(jiffies: u64) -> HashMap<ProcKey, u64> {
+        HashMap::from([(
+            ProcKey {
+                pid: 1,
+                starttime: 0,
+            },
+            jiffies,
+        )])
+    }
+
+    #[test]
+    fn a_failed_stat_read_freezes_both_cpu_baselines() {
+        // Not just the aggregate one. They are numerator and denominator of
+        // the same fraction: advancing the process times alone made the
+        // recovery tick divide one interval of process time by two
+        // intervals of elapsed jiffies and report every process at half.
+        let mut sampler = Sampler::new();
+        sampler.advance_cpu_baseline(Some(stat(100)), times(10));
+
+        sampler.advance_cpu_baseline(None, times(20));
+
+        assert_eq!(sampler.prev_cpu, Some(stat(100)), "the total stayed put");
+        assert_eq!(
+            sampler.prev_times,
+            times(10),
+            "so the process times must stay put too"
+        );
+    }
+
+    #[test]
+    fn a_failed_stat_read_yields_no_baseline_to_store() {
+        // The transform that selects the freeze. It lived inline at the
+        // call site, so the invariant above was pinned while the condition
+        // choosing it was unreachable from any test.
+        assert_eq!(Sampler::baseline_input(None, stat(100)), None);
+        assert_eq!(
+            Sampler::baseline_input(Some(stat(200)), stat(200)),
+            Some(stat(200))
+        );
+    }
+
+    #[test]
+    fn a_successful_stat_read_advances_both_cpu_baselines() {
+        let mut sampler = Sampler::new();
+        sampler.advance_cpu_baseline(Some(stat(100)), times(10));
+
+        sampler.advance_cpu_baseline(Some(stat(200)), times(20));
+
+        assert_eq!(sampler.prev_cpu, Some(stat(200)));
+        assert_eq!(sampler.prev_times, times(20));
+    }
+
     use crate::model::DiskStat;
 
     fn disk(name: &str, sectors: u64) -> DiskStat {

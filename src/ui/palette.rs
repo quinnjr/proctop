@@ -20,7 +20,6 @@ pub struct Palette {
     pub cpu_irq: Color,
     pub cpu_iowait: Color,
     pub mem_used: Color,
-    pub mem_cache: Color,
     pub swap: Color,
     pub label: Color,
     pub header_fg: Color,
@@ -55,7 +54,6 @@ impl Default for Palette {
             cpu_irq: Color::Magenta,
             cpu_iowait: Color::Cyan,
             mem_used: Color::Green,
-            mem_cache: Color::Yellow,
             swap: Color::Red,
             label: Color::Cyan,
             header_fg: Color::Black,
@@ -101,8 +99,9 @@ impl Palette {
     /// The color for a process's CPU figure, so a busy process is visible
     /// without reading the number.
     pub fn cpu_load(&self, fraction: f32) -> Color {
+        // No NaN arm: every comparison below is false for NaN, so it lands
+        // on the last arm. `mem_load` omits one for the same reason.
         match fraction {
-            f if f.is_nan() => self.muted,
             f if f >= 0.5 => self.alert,
             f if f >= 0.1 => self.warn,
             f if f > 0.0 => self.text,
@@ -140,7 +139,6 @@ struct PaletteFile {
     cpu_irq: Option<Spec>,
     cpu_iowait: Option<Spec>,
     mem_used: Option<Spec>,
-    mem_cache: Option<Spec>,
     swap: Option<Spec>,
     label: Option<Spec>,
     header_fg: Option<Spec>,
@@ -165,7 +163,6 @@ impl PaletteFile {
             cpu_irq: self.cpu_irq.map_or(d.cpu_irq, |s| s.0),
             cpu_iowait: self.cpu_iowait.map_or(d.cpu_iowait, |s| s.0),
             mem_used: self.mem_used.map_or(d.mem_used, |s| s.0),
-            mem_cache: self.mem_cache.map_or(d.mem_cache, |s| s.0),
             swap: self.swap.map_or(d.swap, |s| s.0),
             label: self.label.map_or(d.label, |s| s.0),
             header_fg: self.header_fg.map_or(d.header_fg, |s| s.0),

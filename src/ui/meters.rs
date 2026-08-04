@@ -47,9 +47,6 @@ impl Component for Meters {
         let palette = &props.palette;
         let cores = &sample.cores;
 
-        // Memory and swap are just two more meters on the end, so they
-        // flow into whatever column has room rather than always claiming
-        // one of their own.
         let mut meters: Vec<Element> = cores
             .iter()
             .enumerate()

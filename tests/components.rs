@@ -355,34 +355,30 @@ fn the_disk_view_fits_its_row_budget() {
 
 #[test]
 fn the_disk_view_gives_its_whole_budget_to_the_list() {
-    // A fixed 50/50 split left half the tab blank while hiding interfaces.
-    let one_disk_many_nets = render_once::<DiskView>(&DiskViewProps {
-        sample: Shared::new(io_sample(1, 8)),
+    // The tab holds one section now, so a long device list should reach the
+    // bottom of the pane rather than stopping at a share of it.
+    let many_disks = render_once::<DiskView>(&DiskViewProps {
+        sample: Shared::new(io_sample(20, 8)),
         palette: Palette::default(),
         height: 12,
     });
 
     assert_eq!(
-        count_rows(one_disk_many_nets),
+        count_rows(many_disks),
         12,
         "the whole budget should be used"
     );
 }
 
 #[test]
-fn an_unreadable_counter_file_reads_as_unavailable_not_as_idle() {
-    // A restricted container reporting its disks as idle is a lie.
-    let sample = Sample {
-        disks: None,
-        nets: Some(Vec::new()),
-        ..Sample::default()
-    };
-
+fn the_disk_view_does_not_show_interfaces() {
+    // Interfaces moved to the Network tab, beside the sockets that explain
+    // them. Showing them here too means the same rows on two tabs.
     let t = TestTerminal::new(
         60,
         20,
         element!(DiskView(
-            sample: Shared::new(sample),
+            sample: Shared::new(io_sample(2, 4)),
             palette: Palette::default(),
             height: 20u16,
         )),
@@ -390,8 +386,48 @@ fn an_unreadable_counter_file_reads_as_unavailable_not_as_idle() {
     .expect("should render");
 
     let text = t.frame_text();
+    assert!(text.contains("Disks"), "disks belong here:\n{text}");
+    for absent in ["net0", "RX", "TX"] {
+        assert!(
+            !text.contains(absent),
+            "{absent} belongs to the Network tab:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn an_unreadable_counter_file_reads_as_unavailable_not_as_idle() {
+    // A restricted container reporting its disks as idle is a lie.
+    let unreadable = TestTerminal::new(
+        60,
+        20,
+        element!(DiskView(
+            sample: Shared::new(Sample { disks: None, ..Sample::default() }),
+            palette: Palette::default(),
+            height: 20u16,
+        )),
+    )
+    .expect("should render");
+
+    let text = unreadable.frame_text();
     assert!(text.contains("unavailable"), "disks should say so:\n{text}");
-    assert!(text.contains("idle"), "nets genuinely are idle:\n{text}");
+    assert!(!text.contains("idle"), "None is not idle:\n{text}");
+
+    // And the other side of the distinction: read them, nothing moving.
+    let quiet = TestTerminal::new(
+        60,
+        20,
+        element!(DiskView(
+            sample: Shared::new(Sample { disks: Some(Vec::new()), ..Sample::default() }),
+            palette: Palette::default(),
+            height: 20u16,
+        )),
+    )
+    .expect("should render");
+
+    let text = quiet.frame_text();
+    assert!(text.contains("idle"), "these genuinely are idle:\n{text}");
+    assert!(!text.contains("unavailable"), "they were read:\n{text}");
 }
 
 #[test]
@@ -414,4 +450,150 @@ fn exactly_one_header_is_marked_for_each_sort_column() {
             + usize::from(rtop::ui::table::COMMAND_SORT == Some(key));
         assert_eq!(marked, 1, "{key:?} is claimed by {marked} columns");
     }
+}
+
+// ---------- network tab ----------
+
+use rtop::model::{ListeningSocket, Protocol, Socket};
+use rtop::ui::network::{NetworkView, NetworkViewProps};
+
+fn socket(port: u16, attributed: bool) -> ListeningSocket {
+    ListeningSocket {
+        socket: Socket {
+            protocol: Protocol::Tcp,
+            local: format!("0.0.0.0:{port}").parse().unwrap(),
+            uid: 0,
+            inode: port as u64,
+            accept_queue: Some(0),
+        },
+        user: "root".into(),
+        process: attributed.then(|| (1, "init".into())),
+    }
+}
+
+fn net_sample(nets: Option<usize>, sockets: Option<Vec<ListeningSocket>>) -> Sample {
+    Sample {
+        nets: nets.map(|n| {
+            (0..n)
+                .map(|i| IoRate {
+                    name: format!("net{i}"),
+                    read_per_sec: 1_000,
+                    write_per_sec: 1_000,
+                })
+                .collect()
+        }),
+        sockets: sockets.map(NShared::new),
+        ..Sample::default()
+    }
+}
+
+#[test]
+fn the_network_view_fits_its_row_budget() {
+    // The sweep the Disk and Sensors views have had all along. Without it
+    // the listening section overflowed by exactly one row whenever the
+    // budget left no room past its own heading — which is every first frame
+    // on the tab, since the sockets have not been read yet.
+    let lists = [
+        None,
+        Some(Vec::new()),
+        Some((0..3).map(|i| socket(80 + i, true)).collect()),
+        Some((0..40).map(|i| socket(80 + i, i % 3 == 0)).collect()),
+    ];
+
+    for height in [0u16, 1, 2, 3, 4, 5, 6, 10, 20] {
+        for nets in [None, Some(0), Some(1), Some(8)] {
+            for sockets in &lists {
+                let rows = count_rows(render_once::<NetworkView>(&NetworkViewProps {
+                    sample: Shared::new(net_sample(nets, sockets.clone())),
+                    palette: Palette::default(),
+                    height,
+                    selection: Selection::default(),
+                }));
+                assert!(
+                    rows <= height as usize,
+                    "height={height} nets={nets:?} sockets={:?} produced {rows} rows",
+                    sockets.as_ref().map(Vec::len)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_network_view_gives_the_listeners_everything_the_interfaces_left() {
+    // The `<= height` sweep alone passes if the section renders a header
+    // and no rows at all, so it cannot catch the guard being widened.
+    let sockets: Vec<ListeningSocket> = (0..40).map(|i| socket(80 + i, true)).collect();
+
+    for height in [6u16, 8, 10, 20, 30] {
+        let rows = count_rows(render_once::<NetworkView>(&NetworkViewProps {
+            sample: Shared::new(net_sample(Some(1), Some(sockets.clone()))),
+            palette: Palette::default(),
+            height,
+            selection: Selection::default(),
+        }));
+        assert_eq!(
+            rows, height as usize,
+            "height={height}: the pane should be exactly full"
+        );
+    }
+}
+
+#[test]
+fn the_network_view_says_it_is_still_reading_rather_than_unavailable() {
+    // `None` here means "this tab just opened", not "the kernel denied it" —
+    // sockets are only read while the tab shows. Calling that unavailable is
+    // the lie the disk view used to tell.
+    let t = TestTerminal::new(
+        70,
+        20,
+        element!(NetworkView(
+            sample: Shared::new(net_sample(Some(1), None)),
+            palette: Palette::default(),
+            height: 20u16,
+            selection: Selection::default(),
+        )),
+    )
+    .expect("should render");
+
+    let text = t.frame_text();
+    assert!(text.contains("reading sockets"), "{text}");
+    assert!(!text.contains("unavailable"), "{text}");
+}
+
+#[test]
+fn the_attribution_footer_appears_only_when_a_row_is_unattributed() {
+    let render = |sockets: Vec<ListeningSocket>| {
+        TestTerminal::new(
+            80,
+            20,
+            element!(NetworkView(
+                sample: Shared::new(net_sample(Some(1), Some(sockets))),
+                palette: Palette::default(),
+                height: 20u16,
+                selection: Selection::default(),
+            )),
+        )
+        .expect("should render")
+        .frame_text()
+    };
+
+    let all_known = render(vec![socket(80, true), socket(443, true)]);
+    assert!(
+        !all_known.contains("run as root"),
+        "nothing to explain:\n{all_known}"
+    );
+
+    // Count and plural only: which explanation is offered depends on the
+    // uid the suite runs as, and `attribution_note`'s own unit tests pin
+    // both wordings deterministically. The first version of this test
+    // locked in "1 sockets".
+    let one_unknown = render(vec![socket(80, true), socket(443, false)]);
+    assert!(
+        one_unknown.contains("1 socket "),
+        "singular:\n{one_unknown}"
+    );
+
+    let two_unknown = render(vec![socket(80, false), socket(443, false)]);
+    assert!(two_unknown.contains("2 sockets "), "plural:\n{two_unknown}");
 }

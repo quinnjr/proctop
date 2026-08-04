@@ -102,8 +102,10 @@ pub fn should_refresh(
 /// aggregate `/proc/stat` line — the denominator for per-process usage.
 pub fn total_jiffies(prev: &CpuTimes, cur: &CpuTimes) -> u64 {
     let fields = |t: &CpuTimes| {
-        // Guest time is already counted inside user/nice, so it is excluded
-        // here for the same reason it is subtracted out in `cpu_usage`.
+        // Guest time is already counted inside user/nice, so leaving the
+        // guest columns out of this sum IS the correction — do not also
+        // subtract them. Doing both removes guest time twice and inflates
+        // every percentage that divides by this.
         //
         // Saturating rather than plain `+`: this runs on the sampling task,
         // which the design requires to be panic-free *by construction*, and

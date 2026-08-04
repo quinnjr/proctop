@@ -24,12 +24,6 @@ impl Component for Detail {
     type Props = DetailProps;
 
     fn render(props: &DetailProps, _hooks: &mut Hooks) -> Element {
-        Detail::render_tree(props)
-    }
-}
-
-impl Detail {
-    fn render_tree(props: &DetailProps) -> Element {
         let palette = &props.palette;
 
         let Some(row) = &props.row else {
@@ -130,12 +124,6 @@ impl Component for Kill {
     type Props = KillProps;
 
     fn render(props: &KillProps, _hooks: &mut Hooks) -> Element {
-        Kill::render_tree(props)
-    }
-}
-
-impl Kill {
-    fn render_tree(props: &KillProps) -> Element {
         let palette = &props.palette;
         let mut body = vec![
             overlay::row(
@@ -214,12 +202,6 @@ impl Component for Renice {
     type Props = ReniceProps;
 
     fn render(props: &ReniceProps, _hooks: &mut Hooks) -> Element {
-        Renice::render_tree(props)
-    }
-}
-
-impl Renice {
-    fn render_tree(props: &ReniceProps) -> Element {
         let palette = &props.palette;
 
         if !props.alive {

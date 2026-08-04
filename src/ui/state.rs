@@ -9,7 +9,7 @@ use ntui::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::actions::{NICE_MAX, NICE_MIN, SIGNALS, Signal};
 use crate::filter::Filter;
-use crate::model::{ProcKey, ProcRow};
+use crate::model::{ListeningSocket, ProcKey, ProcRow};
 use crate::sort::SortKey;
 use crate::ui::Selection;
 
@@ -23,8 +23,32 @@ pub enum Tab {
     Sensors,
 }
 
+/// Which scrollable list a tab shows, if any.
+///
+/// `UiState::cursor` picks the cursor and `Lists::extent` picks the bounds
+/// it moves against; both dispatch on this rather than on `Tab` directly,
+/// so giving a tab a list is one edit that both sides read. Two independent
+/// `match self.tab` arms is how a cursor ends up moving against another
+/// list's length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Driven {
+    Processes,
+    Sockets,
+    /// The tab shows no list: movement keys do nothing at all.
+    Nothing,
+}
+
 impl Tab {
     pub const ALL: [Tab; 4] = [Tab::Processes, Tab::Disk, Tab::Network, Tab::Sensors];
+
+    /// The list this tab's movement keys drive.
+    pub fn driven(self) -> Driven {
+        match self {
+            Tab::Processes => Driven::Processes,
+            Tab::Network => Driven::Sockets,
+            Tab::Disk | Tab::Sensors => Driven::Nothing,
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -76,7 +100,15 @@ pub enum Overlay {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UiState {
     pub tab: Tab,
+    /// Cursor into the process table.
     pub selection: Selection,
+    /// Cursor into the Network tab's listening list.
+    ///
+    /// Separate from `selection` because the two lists have nothing to do
+    /// with each other: sharing one cursor meant scrolling the process
+    /// table scrolled the socket list off its own viewport, and there was
+    /// no key that could bring it back.
+    pub socket_selection: Selection,
     pub sort: SortKey,
     pub descending: bool,
     pub filter: Filter,
@@ -127,31 +159,97 @@ impl UiState {
     pub fn selected<'a>(&self, rows: &'a [ProcRow]) -> Option<&'a ProcRow> {
         rows.get(self.selection.index)
     }
+
+    /// The cursor the movement keys drive, or `None` on a tab with no list.
+    ///
+    /// `None` rather than falling back to the process cursor: `j` on the
+    /// Disk tab used to scroll the process table off screen, so switching
+    /// back left the cursor on a row the user never chose — with `dd` two
+    /// keystrokes away from it.
+    fn cursor(&mut self) -> Option<&mut Selection> {
+        match self.tab.driven() {
+            Driven::Processes => Some(&mut self.selection),
+            Driven::Sockets => Some(&mut self.socket_selection),
+            Driven::Nothing => None,
+        }
+    }
+
+    /// Whether the process list is the thing on screen.
+    ///
+    /// The actions — `Enter`, `dd`, `n`, `u` — all name the selected
+    /// process, so off this tab there is nothing for them to act on. Left
+    /// ungated, they acted on whatever row the process cursor happened to
+    /// rest on, which the user could not see.
+    fn on_processes(&self) -> bool {
+        self.tab.driven() == Driven::Processes
+    }
+}
+
+/// The lists a cursor can move through, as currently displayed.
+///
+/// Which one the movement keys drive depends on the tab, so the keymap
+/// needs the extent of both. Passing only the process list is what let `j`
+/// on the Network tab scroll a table nobody was looking at.
+#[derive(Clone, Copy, Default)]
+#[non_exhaustive]
+pub struct Lists<'a> {
+    /// Processes, already filtered and sorted.
+    pub procs: &'a [ProcRow],
+    /// How many process rows fit on screen.
+    pub proc_height: usize,
+    /// Listening sockets shown on the Network tab.
+    pub sockets: &'a [ListeningSocket],
+    /// How many socket rows fit on screen.
+    pub socket_height: usize,
+}
+
+impl<'a> Lists<'a> {
+    /// The process list and how many of its rows are on screen.
+    pub fn processes(procs: &'a [ProcRow], height: usize) -> Self {
+        Lists {
+            procs,
+            proc_height: height,
+            ..Lists::default()
+        }
+    }
+
+    /// Add the Network tab's listening list.
+    pub fn with_sockets(self, sockets: &'a [ListeningSocket], height: usize) -> Self {
+        Lists {
+            sockets,
+            socket_height: height,
+            ..self
+        }
+    }
+}
+
+impl Lists<'_> {
+    /// The length and visible height of whichever list `tab` is showing.
+    fn extent(&self, tab: Tab) -> (usize, usize) {
+        match tab.driven() {
+            Driven::Processes => (self.procs.len(), self.proc_height),
+            Driven::Sockets => (self.sockets.len(), self.socket_height),
+            Driven::Nothing => (0, 0),
+        }
+    }
 }
 
 /// Apply one key press.
-///
-/// `rows` is the list as currently displayed — already filtered and sorted —
-/// and `height` is how many of them fit on screen.
-pub fn handle_key(state: &mut UiState, key: KeyEvent, rows: &[ProcRow], height: usize) -> Effect {
+pub fn handle_key(state: &mut UiState, key: KeyEvent, lists: Lists) -> Effect {
     // Anything typed while an overlay is open belongs to the overlay.
     if state.overlay != Overlay::None {
         return handle_overlay_key(state, key);
     }
     match &state.mode {
-        Mode::Normal => handle_normal_key(state, key, rows, height),
+        Mode::Normal => handle_normal_key(state, key, lists),
         Mode::Search(_) => handle_search_key(state, key),
         Mode::Command(_) => handle_command_key(state, key),
     }
 }
 
-fn handle_normal_key(
-    state: &mut UiState,
-    key: KeyEvent,
-    rows: &[ProcRow],
-    height: usize,
-) -> Effect {
-    let len = rows.len();
+fn handle_normal_key(state: &mut UiState, key: KeyEvent, lists: Lists) -> Effect {
+    let rows = lists.procs;
+    let (len, height) = lists.extent(state.tab);
     let page = height.max(1) as isize;
     // Clearing on the next keystroke keeps a stale "killed 1234" from
     // sitting in the status bar indefinitely.
@@ -166,7 +264,9 @@ fn handle_normal_key(
     // `Char('d')`, so comparing the code alone let the documented
     // half-page-down key finish `dd` and open a destructive dialog.
     if state.pending.take() == Some('d') && is_plain(&key, 'd') {
-        if let Some(row) = state.selected(rows) {
+        if state.on_processes()
+            && let Some(row) = state.selected(rows)
+        {
             state.overlay = Overlay::Kill {
                 key: row.proc.key(),
                 name: row.proc.name.clone(),
@@ -189,14 +289,46 @@ fn handle_normal_key(
             }
         }
 
-        KeyCode::Char('j') | KeyCode::Down => state.selection.move_by(1, len, height),
-        KeyCode::Char('k') | KeyCode::Up => state.selection.move_by(-1, len, height),
-        KeyCode::Char('d') if ctrl(&key) => state.selection.move_by(page / 2, len, height),
-        KeyCode::Char('u') if ctrl(&key) => state.selection.move_by(-page / 2, len, height),
-        KeyCode::PageDown => state.selection.move_by(page, len, height),
-        KeyCode::PageUp => state.selection.move_by(-page, len, height),
-        KeyCode::Char('g') | KeyCode::Home => state.selection.to_start(),
-        KeyCode::Char('G') | KeyCode::End => state.selection.to_end(len, height),
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(c) = state.cursor() {
+                c.move_by(1, len, height);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(c) = state.cursor() {
+                c.move_by(-1, len, height);
+            }
+        }
+        KeyCode::Char('d') if ctrl(&key) => {
+            if let Some(c) = state.cursor() {
+                c.move_by(page / 2, len, height);
+            }
+        }
+        KeyCode::Char('u') if ctrl(&key) => {
+            if let Some(c) = state.cursor() {
+                c.move_by(-page / 2, len, height);
+            }
+        }
+        KeyCode::PageDown => {
+            if let Some(c) = state.cursor() {
+                c.move_by(page, len, height);
+            }
+        }
+        KeyCode::PageUp => {
+            if let Some(c) = state.cursor() {
+                c.move_by(-page, len, height);
+            }
+        }
+        KeyCode::Char('g') | KeyCode::Home => {
+            if let Some(c) = state.cursor() {
+                c.to_start();
+            }
+        }
+        KeyCode::Char('G') | KeyCode::End => {
+            if let Some(c) = state.cursor() {
+                c.to_end(len, height);
+            }
+        }
 
         KeyCode::Char('/') => state.mode = Mode::Search(state.filter.query.clone()),
         KeyCode::Char(':') => state.mode = Mode::Command(String::new()),
@@ -225,13 +357,16 @@ fn handle_normal_key(
             state.filter.hide_kernel_threads = !state.filter.hide_kernel_threads;
             state.selection.to_start();
         }
-        // Filter to the selected process's owner, or clear that filter if
-        // it is already on.
-        KeyCode::Char('u') => {
-            state.filter.user = match state.filter.user {
-                Some(_) => None,
-                None => state.selected(rows).map(|r| r.user.to_string()),
-            };
+        // Clearing an active filter needs no visible row, so it works from
+        // any tab.
+        KeyCode::Char('u') if state.filter.user.is_some() => {
+            state.filter.user = None;
+            state.selection.to_start();
+        }
+        // Setting one names the selected process, so it needs a row the
+        // user can actually see.
+        KeyCode::Char('u') if state.on_processes() => {
+            state.filter.user = state.selected(rows).map(|r| r.user.to_string());
             state.selection.to_start();
         }
 
@@ -242,7 +377,9 @@ fn handle_normal_key(
         }
 
         KeyCode::Enter => {
-            if let Some(row) = state.selected(rows) {
+            if state.on_processes()
+                && let Some(row) = state.selected(rows)
+            {
                 state.overlay = Overlay::Detail {
                     key: row.proc.key(),
                 };
@@ -252,9 +389,11 @@ fn handle_normal_key(
         // (handled above) opens the confirmation. Two keystrokes plus a
         // confirmation, and deliberately not `k`, which is navigation in a
         // list being actively scrolled.
-        KeyCode::Char('d') if !ctrl(&key) => state.pending = Some('d'),
+        KeyCode::Char('d') if !ctrl(&key) && state.on_processes() => state.pending = Some('d'),
         KeyCode::Char('n') => {
-            if let Some(row) = state.selected(rows) {
+            if state.on_processes()
+                && let Some(row) = state.selected(rows)
+            {
                 state.overlay = Overlay::Renice {
                     key: row.proc.key(),
                     name: row.proc.name.clone(),

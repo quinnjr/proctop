@@ -9,7 +9,6 @@ cpu_irq    = "magenta"
 cpu_iowait = "cyan"
 
 mem_used  = "green"
-mem_cache = "yellow"
 swap      = "red"
 
 label     = "cyan"

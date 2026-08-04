@@ -171,8 +171,7 @@ pub struct DiskStat {
     pub name: String,
     pub reads: u64,
     pub writes: u64,
-    /// Sectors, which `/proc/diskstats` fixes at 512 bytes regardless of the
-    /// device's real block size.
+    /// Sectors — see [`SECTOR_BYTES`].
     pub sectors_read: u64,
     pub sectors_written: u64,
 }
@@ -282,22 +281,22 @@ pub enum Exposure {
 
 impl Exposure {
     pub fn of(addr: &std::net::SocketAddr) -> Exposure {
-        let ip = addr.ip();
+        // A dual-stack listener bound to an IPv4 address appears in
+        // `/proc/net/tcp6` as `::ffff:0.0.0.0`, and `Ipv6Addr`'s own
+        // predicates are exact: `is_unspecified` is `::` alone. Classifying
+        // the mapped form by its v6 shape called a wildcard bind
+        // interface-specific and sorted it *below* loopback — the view
+        // under-reporting the one thing it exists to show.
+        let ip = match addr.ip() {
+            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(addr.ip(), std::net::IpAddr::V4),
+            v4 => v4,
+        };
         if ip.is_unspecified() {
             Exposure::Exposed
         } else if ip.is_loopback() {
             Exposure::Loopback
         } else {
             Exposure::Interface
-        }
-    }
-
-    /// The word shown beside the address.
-    pub fn label(self) -> &'static str {
-        match self {
-            Exposure::Exposed => "all",
-            Exposure::Interface => "iface",
-            Exposure::Loopback => "local",
         }
     }
 }

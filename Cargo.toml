@@ -3,6 +3,8 @@ name = "rtop"
 description = "An htop-inspired system monitor built on ntui"
 version = "0.1.0"
 edition = "2024"
+# let-chains in `ui::state` and `filter` are stable from here.
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/quinnjr/rtop"
 

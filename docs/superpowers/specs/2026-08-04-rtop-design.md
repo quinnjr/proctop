@@ -375,14 +375,19 @@ to 2.5% and the bench is what caught it. See *What phase 6 actually cost*.
 `~/.config/rtop/config.toml`, following the XDG base directory spec. A
 missing file is not an error — defaults apply and nothing is written.
 
+Every key below is one the implementation accepts. Both structs carry
+`deny_unknown_fields`, so an example with an aspirational key in it is not
+a harmless illustration — pasting it is a fatal startup error. `columns`
+and `show_threads` were in the original draft of this section and are not
+implemented; they have been removed rather than left to be copied.
+
 ```toml
 refresh_ms = 1500
 theme = "gruvbox"
-show_threads = false
 tree_view = false
+hide_kernel_threads = false
 
 [processes]
-columns = ["pid", "user", "cpu", "mem", "state", "time", "command"]
 sort_by = "cpu"
 sort_desc = true
 ```
@@ -406,7 +411,7 @@ using.
 | 2 | ✅ Header meters + `ProcessTable` + sort + scroll | **rtop is usable as a monitor.** |
 | 3 | ✅ Search, command line, help overlay, kill, renice | Full process interaction. |
 | 4 | ✅ Detail pane | Per-process drill-down. |
-| 5 | ✅ I/O tab | Disk and network throughput. |
+| 5 | ✅ Disk tab | Per-device throughput. Split from the original I/O tab when the Network tab took the interface half — see the network-tab design doc. |
 | 6 | ✅ Sensors tab | Thermal, fan, battery. |
 | 7 | ✅ Config file and themes | Persistence and theming. |
 

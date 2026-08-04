@@ -209,3 +209,39 @@ fn every_columns_canonical_name_round_trips() {
         );
     }
 }
+
+/// The design spec, read at compile time so the examples in it are checked
+/// rather than copied.
+const DESIGN_SPEC: &str = include_str!("../docs/superpowers/specs/2026-08-04-rtop-design.md");
+
+#[test]
+fn every_config_example_in_the_design_spec_parses() {
+    // Copying the spec's TOML into this file could only ever prove the copy
+    // still parsed — and the finding this test exists for was the spec
+    // drifting from the code. `deny_unknown_fields` means a stale example
+    // is not a harmless illustration: pasting it is a fatal startup error.
+    let blocks: Vec<&str> = DESIGN_SPEC
+        .split("```toml")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("```").map(|(block, _)| block))
+        .collect();
+
+    assert!(
+        !blocks.is_empty(),
+        "the spec should still document a config"
+    );
+
+    for block in blocks {
+        let config = Config::parse(block)
+            .unwrap_or_else(|e| panic!("a documented config must load: {e}\n{block}"));
+
+        // Not just "does not error": the values the example states are the
+        // claim a reader acts on.
+        assert_eq!(config.refresh_ms, 1500);
+        assert_eq!(config.theme, "gruvbox");
+        assert!(!config.tree_view);
+        assert!(!config.hide_kernel_threads);
+        assert_eq!(config.processes.sort_by, SortKey::Cpu);
+        assert!(config.processes.sort_desc);
+    }
+}

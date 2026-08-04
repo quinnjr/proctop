@@ -31,9 +31,10 @@ That is a separate feature if it is ever wanted.
 
 Four tabs: `Processes │ Disk │ Network │ Sensors`, selected by `1`–`4`.
 
-`Disk` is the old `Io` view with the network section removed — the split
-helper, the row budget and the "unavailable" versus "idle" distinction all
-survive unchanged, with one section instead of two.
+`Disk` is the old `Io` view with the network section removed. The row budget
+and the "unavailable" versus "idle" distinction survive unchanged; with one
+section left it simply takes the whole pane, so the two-way split helper the
+old tab used is gone with the section that needed it.
 
 `Network` stacks two sections:
 
@@ -51,9 +52,10 @@ udp   0.0.0.0                     5353   - avahi     avahi-daemon
 ```
 
 The interfaces section is the throughput block moved verbatim; the
-listening section is new. The row budget is split between them by the same
-demand-following `split` the Disk tab uses, so a machine with one interface
-and forty listeners does not waste half the pane.
+listening section is new. The row budget follows demand rather than being a
+fixed half each — interfaces take what they need up to half the pane and the
+listeners get the rest — so a machine with one interface and forty listeners
+does not waste half the pane.
 
 ## 2. What counts as listening
 
@@ -109,8 +111,10 @@ pub struct Socket {
     /// Socket inode, the join key to a process via /proc/<pid>/fd.
     pub inode: u64,
     /// For a TCP listener, connections established and waiting to be
-    /// accepted. Meaningless for UDP.
-    pub accept_queue: u32,
+    /// accepted. `None` for UDP, which has no accept queue at all — a
+    /// different fact from having an empty one, and the reason this is an
+    /// `Option` rather than a `u32` that renders `0`.
+    pub accept_queue: Option<u32>,
 }
 
 pub struct ListeningSocket {
@@ -124,6 +128,15 @@ pub struct ListeningSocket {
 
 `Socket::exposure()` classifies the local address into the three cases in
 §3, and is what both the colour and the sort key come from.
+
+### Attribution is not unique
+
+A socket inode can appear in more than one process's `fd` directory — a
+forked child inherits it, and a pre-fork server model has several. The map
+keeps the last holder walked, so which one is shown is arbitrary rather
+than wrong. `ss -p` lists them all; a single column cannot, and the pid
+that matters (the one that bound the port) is not distinguishable from
+`/proc` alone.
 
 ### The accept queue caveat
 
@@ -156,10 +169,17 @@ So it gets the treatment sensors got, for the same reason:
 `sensors`: `None` means "not read" and renders "reading sockets…";
 `Some(vec![])` means "read, nothing is listening". They render differently.
 
-There is deliberately no third "unavailable" state. `/proc/net/*` is
-guaranteed by procfs on every Linux, so it falls on the same side of the
-line as `mem`/`load`/`uptime` rather than with `disks`/`nets`/`sensors`,
-which a restricted container can legitimately deny.
+`None` is also what a machine that cannot read `/proc/net` at all reports —
+a restricted container or a `hidepid` mount — because claiming "nothing is
+listening" there would be a statement rather than a degraded view. A
+partial read is different and deliberately silent: with IPv6 disabled at
+boot the v6 files are absent, and there are no v6 sockets to miss.
+
+There is deliberately no third "unavailable" state. `/proc/net/tcp` and
+`udp` are always present, and the v6 files are absent only when IPv6 is
+disabled at boot (`ipv6.disable=1`) — in which case there are no v6 sockets
+to miss. An empty read is therefore indistinguishable from a correct one,
+so the extra state would carry no information a user could act on.
 
 ### The privilege cliff
 
@@ -185,9 +205,11 @@ common case, not a failure. See §6 for why `/proc/net/*` gets no
 ## 8. Scrolling
 
 Fifty rows fits a normal terminal, but a container host with many bound
-services will not. The listening section uses `ListSelection` and the
-viewport slice rather than assuming it fits — both are already in `ntui`
-and cost almost nothing to wire.
+services will not. The listening section carries **its own** `Selection`
+(`ui::Selection`, ntui's list cursor) and slices to the viewport rather
+than assuming it fits. Its own, not the process table's: one cursor shared
+between two unrelated lists means scrolling either one scrolls the other
+off its viewport, with no key that can bring it back.
 
 ## 9. Module map
 

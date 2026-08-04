@@ -161,12 +161,20 @@ fn reads_sockets_when_they_are() {
 }
 
 #[test]
-fn attributes_at_least_one_socket_to_a_process_it_can_read() {
-    // Unprivileged, only our own processes are attributable — but the test
-    // binary owns at least the sockets it can see, so if the machine is
-    // listening on anything we own, the join must find it.
-    let mut sampler = Sampler::new();
+fn attributes_our_own_listening_socket_to_this_process() {
+    // Hermetic: we bind the listener, so the assertion is about the join
+    // rather than about whether the host happens to run any services. The
+    // previous form was `ours == 0 || attributed > 0`, which asserted
+    // nothing at all on a container with no listeners — and the inode
+    // filter it covers could have been built from the wrong field with the
+    // suite still green.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("should bind");
+    let port = listener
+        .local_addr()
+        .expect("should have an address")
+        .port();
 
+    let mut sampler = Sampler::new();
     let sample = sampler.sample(Wanted {
         sockets: true,
         ..Wanted::default()
@@ -175,14 +183,13 @@ fn attributes_at_least_one_socket_to_a_process_it_can_read() {
 
     let ours = sockets
         .iter()
-        .filter(|s| s.socket.uid == unsafe { libc::getuid() })
-        .count();
-    let attributed = sockets.iter().filter(|s| s.process.is_some()).count();
+        .find(|s| s.socket.local.port() == port)
+        .unwrap_or_else(|| panic!("our own listener on {port} should appear"));
 
-    // Either we own no listening sockets, or some of them resolved.
-    assert!(
-        ours == 0 || attributed > 0,
-        "{ours} sockets owned by this uid, none attributed"
+    assert_eq!(
+        ours.process.as_ref().map(|(pid, _)| *pid),
+        Some(std::process::id() as i32),
+        "the inode join should reach this process"
     );
 }
 
@@ -200,4 +207,26 @@ fn keeps_showing_the_last_socket_reading_between_refreshes() {
     });
 
     assert_eq!(first.sockets, second.sockets);
+}
+
+#[test]
+fn the_bench_still_measures_every_gated_subsystem() {
+    // `examples/bench.rs` enumerates the four `Wanted` combinations, and it
+    // is the only place that does. It measured `Wanted::default()` alone
+    // once — the one configuration that excludes both expensive subsystems
+    // — so a regression in either was invisible to the tool credited with
+    // catching exactly that.
+    let bench = include_str!("../examples/bench.rs");
+
+    for combination in [
+        "sensors: false,\n            sockets: false,",
+        "sensors: true,\n            sockets: false,",
+        "sensors: false,\n            sockets: true,",
+        "sensors: true,\n            sockets: true,",
+    ] {
+        assert!(
+            bench.contains(combination),
+            "the bench should still time this combination:\n{combination}"
+        );
+    }
 }

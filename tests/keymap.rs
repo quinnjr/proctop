@@ -1,10 +1,16 @@
 use ntui::{KeyCode, KeyEvent, KeyModifiers};
 use rtop::actions::Signal;
-use rtop::model::{Proc, ProcRow};
+use rtop::model::{ListeningSocket, Proc, ProcRow, Protocol, Socket};
 use rtop::sort::SortKey;
-use rtop::ui::state::{Effect, Mode, Overlay, Tab, UiState, handle_key};
+use rtop::ui::state::{Effect, Lists, Mode, Overlay, Tab, UiState, handle_key};
 
 const HEIGHT: usize = 10;
+
+/// The process list, with no sockets — what every test here drives unless
+/// it says otherwise.
+fn procs(rows: &[ProcRow]) -> Lists<'_> {
+    Lists::processes(rows, HEIGHT)
+}
 
 fn rows(n: usize) -> Vec<ProcRow> {
     (0..n)
@@ -25,8 +31,7 @@ fn press(state: &mut UiState, code: KeyCode) -> Effect {
     handle_key(
         state,
         KeyEvent::new(code, KeyModifiers::NONE),
-        &rows(50),
-        HEIGHT,
+        procs(&rows(50)),
     )
 }
 
@@ -34,8 +39,7 @@ fn press_ctrl(state: &mut UiState, code: KeyCode) -> Effect {
     handle_key(
         state,
         KeyEvent::new(code, KeyModifiers::CONTROL),
-        &rows(50),
-        HEIGHT,
+        procs(&rows(50)),
     )
 }
 
@@ -466,8 +470,7 @@ fn dd_does_nothing_when_the_list_is_empty() {
         let effect = handle_key(
             &mut state,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-            &[],
-            HEIGHT,
+            procs(&[]),
         );
         assert_eq!(effect, Effect::None);
     }
@@ -665,6 +668,208 @@ fn every_help_key_fits_the_column_it_is_rendered_in() {
             "{keys:?} ({description}) is {} chars, column is {}",
             keys.chars().count(),
             rtop::ui::overlay::LABEL_WIDTH
+        );
+    }
+}
+
+// ---------- the network tab drives its own list ----------
+
+/// A Network-tab fixture that owns its socket count, so the number is
+/// stated once. The previous shape took a count it ignored and made every
+/// caller repeat it, where a mismatch read as intentional.
+struct Net {
+    state: UiState,
+    rows: Vec<ProcRow>,
+    sockets: Vec<ListeningSocket>,
+}
+
+fn network(sockets: usize) -> Net {
+    Net {
+        state: UiState {
+            tab: Tab::Network,
+            ..UiState::default()
+        },
+        rows: rows(50),
+        sockets: (0..sockets).map(|i| socket(1000 + i as u16)).collect(),
+    }
+}
+
+fn socket(port: u16) -> ListeningSocket {
+    ListeningSocket {
+        socket: Socket {
+            protocol: Protocol::Tcp,
+            local: format!("0.0.0.0:{port}").parse().unwrap(),
+            uid: 0,
+            inode: port as u64,
+            accept_queue: Some(0),
+        },
+        user: "root".into(),
+        process: None,
+    }
+}
+
+impl Net {
+    fn press(&mut self, code: KeyCode) {
+        handle_key(
+            &mut self.state,
+            KeyEvent::new(code, KeyModifiers::NONE),
+            Lists::processes(&self.rows, HEIGHT).with_sockets(&self.sockets, HEIGHT),
+        );
+    }
+}
+
+#[test]
+fn movement_on_the_network_tab_moves_the_socket_cursor_only() {
+    // One shared cursor meant scrolling the process table scrolled the
+    // socket list off its own viewport, with no key that could bring it
+    // back — the listening section rendered as an empty body under its
+    // header.
+    let mut net = network(20);
+    net.state.selection.index = 40;
+    net.state.selection.offset = 31;
+
+    for _ in 0..3 {
+        net.press(KeyCode::Char('j'));
+    }
+
+    assert_eq!(
+        net.state.socket_selection.index, 3,
+        "the socket cursor moved"
+    );
+    assert_eq!(
+        net.state.selection.index, 40,
+        "the process cursor stayed where it was"
+    );
+}
+
+#[test]
+fn the_socket_cursor_stops_at_the_end_of_the_socket_list() {
+    // Not at the end of the process list, which is longer.
+    let mut net = network(4);
+
+    for _ in 0..20 {
+        net.press(KeyCode::Char('j'));
+    }
+
+    assert_eq!(net.state.socket_selection.index, 3);
+}
+
+#[test]
+fn g_and_shift_g_move_the_socket_cursor() {
+    let mut net = network(30);
+
+    net.press(KeyCode::Char('G'));
+    assert_eq!(net.state.socket_selection.index, 29);
+
+    net.press(KeyCode::Char('g'));
+    assert_eq!(net.state.socket_selection.index, 0);
+    assert_eq!(
+        net.state.selection.index, 0,
+        "the process cursor never moved"
+    );
+}
+
+#[test]
+fn the_process_actions_do_nothing_on_the_network_tab() {
+    // Every one of these names the selected process. Off the process tab
+    // they were acting on a row the user could not see — `dd` offering to
+    // signal an arbitrary process.
+    let mut net = network(10);
+    net.state.selection.index = 7;
+
+    net.press(KeyCode::Enter);
+    assert_eq!(net.state.overlay, Overlay::None, "no detail pane");
+
+    net.press(KeyCode::Char('n'));
+    assert_eq!(net.state.overlay, Overlay::None, "no renice dialog");
+
+    for _ in 0..2 {
+        net.press(KeyCode::Char('d'));
+    }
+    assert_eq!(net.state.overlay, Overlay::None, "no kill dialog");
+}
+
+#[test]
+fn setting_a_user_filter_needs_a_visible_process_row() {
+    // `u` off the process tab used to still run: it cleared nothing but
+    // rewound the process cursor, which is the invisible-list scrolling the
+    // whole fix exists to stop.
+    let mut net = network(10);
+    net.state.selection.index = 30;
+    net.state.selection.offset = 21;
+
+    net.press(KeyCode::Char('u'));
+
+    assert_eq!(net.state.filter.user, None, "nothing to filter by off-tab");
+    assert_eq!(
+        net.state.selection.index, 30,
+        "the process cursor must not move"
+    );
+    assert_eq!(net.state.selection.offset, 21);
+}
+
+#[test]
+fn clearing_an_active_user_filter_works_from_any_tab() {
+    // The useful half of `u` needs no visible row, so gating the whole key
+    // would have cost something real.
+    let mut net = network(10);
+    net.state.filter.user = Some("postgres".into());
+
+    net.press(KeyCode::Char('u'));
+
+    assert_eq!(net.state.filter.user, None, "the filter is cleared");
+}
+
+#[test]
+fn the_actions_still_work_after_coming_back_to_the_process_tab() {
+    // The gate is the tab, not a latch that stays shut.
+    let mut net = network(10);
+    net.press(KeyCode::Char('1'));
+    assert_eq!(net.state.tab, Tab::Processes);
+
+    net.press(KeyCode::Enter);
+    assert!(matches!(net.state.overlay, Overlay::Detail { .. }));
+}
+
+// ---------- tabs with no list of their own ----------
+
+#[test]
+fn movement_on_the_disk_and_sensors_tabs_scrolls_nothing() {
+    // `j` on the Disk tab used to scroll the process table nobody was
+    // looking at, so switching back left the cursor on a row the user never
+    // chose — with `dd` two keystrokes away from it.
+    for tab in [Tab::Disk, Tab::Sensors] {
+        let mut state = UiState {
+            tab,
+            selection: rtop::ui::Selection {
+                index: 12,
+                offset: 5,
+            },
+            ..UiState::default()
+        };
+        let list = rows(50);
+
+        for key in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('G'),
+            KeyCode::Char('g'),
+            KeyCode::PageDown,
+        ] {
+            handle_key(
+                &mut state,
+                KeyEvent::new(key, KeyModifiers::NONE),
+                Lists::processes(&list, HEIGHT),
+            );
+        }
+
+        assert_eq!(
+            state.selection.index, 12,
+            "{tab:?} moved the process cursor"
+        );
+        assert_eq!(
+            state.selection.offset, 5,
+            "{tab:?} scrolled the process list"
         );
     }
 }

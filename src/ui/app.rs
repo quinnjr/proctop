@@ -20,10 +20,10 @@ use crate::ui::detail::{Detail, DetailProps, Kill, KillProps, Renice, ReniceProp
 use crate::ui::help::{Help, HelpProps};
 use crate::ui::io::{DiskView, DiskViewProps};
 use crate::ui::meters::{Meters, MetersProps};
-use crate::ui::network::{NetworkView, NetworkViewProps};
+use crate::ui::network::{self, NetworkView, NetworkViewProps};
 use crate::ui::palette::Palette;
 use crate::ui::sensors::{SensorView, SensorViewProps};
-use crate::ui::state::{Effect, Mode, Overlay, Tab, UiState, handle_key};
+use crate::ui::state::{Effect, Lists, Mode, Overlay, Tab, UiState, handle_key};
 use crate::ui::table::{ProcessTable, ProcessTableProps, cell};
 use crate::ui::{Shared, meters};
 
@@ -155,13 +155,34 @@ impl Component for App {
         let mut cursor = state.selection;
         cursor.clamp(rows.len(), table_rows as usize);
 
+        // Clamped against the listening list's own length and its own share
+        // of the pane — see `UiState::socket_selection` for why it is not
+        // the process cursor.
+        let listening: &[_] = current.sockets.as_deref().map_or(&[], |s| s.as_slice());
+        let socket_height = network::socket_capacity(body_rows as usize, &current);
+        let mut socket_cursor = state.socket_selection;
+        // Clamped only while this tab owns the data. Off it, `sockets` is
+        // `None`, and clamping against a length of zero would rewind the
+        // cursor — so a glance at another tab lost your place in a
+        // forty-row list, which the process cursor never does.
+        if state.tab == Tab::Network {
+            socket_cursor.clamp(listening.len(), socket_height);
+        }
+
         {
             let (ui, rows) = (ui.clone(), rows.clone());
-            let height = table_rows as usize;
+            let proc_height = table_rows as usize;
+            let listening_for_keys: Vec<_> = listening.to_vec();
             hooks.use_input(move |ev, _| {
                 let mut next = ui.get();
                 next.selection = cursor;
-                let effect = handle_key(&mut next, ev, &rows, height);
+                next.socket_selection = socket_cursor;
+                let effect = handle_key(
+                    &mut next,
+                    ev,
+                    Lists::processes(&rows, proc_height)
+                        .with_sockets(&listening_for_keys, socket_height),
+                );
 
                 match effect {
                     Effect::None => {}
@@ -221,7 +242,7 @@ impl Component for App {
                     sample: current.clone(),
                     palette: palette,
                     height: body_rows,
-                    selection: cursor,
+                    selection: socket_cursor,
                 )),
                 Tab::Sensors => element!(SensorView(
                     sample: current.clone(),

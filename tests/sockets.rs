@@ -16,8 +16,9 @@ fn ports(sockets: &[rtop::model::Socket]) -> Vec<u16> {
 
 #[test]
 fn keeps_only_tcp_sockets_in_the_listen_state() {
-    // The fixture has two non-listening rows: an established connection and
-    // a SYN_SENT. Neither is something the machine is offering.
+    // The fixture has two non-listening rows: a CLOSE_WAIT (state 08) and
+    // an established connection (01). Neither is something the machine is
+    // offering.
     let listening = sockets::parse(TCP, Protocol::Tcp);
 
     assert_eq!(ports(&listening), vec![39697, 5434, 80, 65535]);
@@ -75,6 +76,15 @@ fn decodes_ipv6_as_four_little_endian_words() {
         listening[2].local.ip(),
         IpAddr::V6("2001:db8::1".parse().unwrap())
     );
+    // A dual-stack socket bound to 0.0.0.0: the mapped prefix lands in the
+    // third word, so a whole-address byte reversal shows it somewhere else
+    // entirely.
+    assert_eq!(
+        listening[3].local.ip(),
+        IpAddr::V6("::ffff:0.0.0.0".parse().unwrap())
+    );
+    assert_eq!(listening[3].local.port(), 8080);
+    assert_eq!(listening[3].exposure(), Exposure::Exposed);
 }
 
 #[test]
@@ -169,12 +179,52 @@ fn orders_exposed_sockets_before_loopback_ones() {
     all.extend(sockets::parse(TCP6, Protocol::Tcp6));
     sockets::sort(&mut all);
 
+    // Asserted against a literal, not against a re-sort of the same values:
+    // sorting a clone with the same derived `Ord` passes even if the variant
+    // order is wrong, since the code and the expectation would then be wrong
+    // together.
     let exposures: Vec<Exposure> = all.iter().map(|s| s.exposure()).collect();
-    let mut sorted = exposures.clone();
-    sorted.sort();
     assert_eq!(
-        exposures, sorted,
+        exposures,
+        vec![
+            Exposure::Exposed,
+            Exposure::Exposed,
+            Exposure::Exposed,
+            Exposure::Exposed,
+            Exposure::Interface,
+            Exposure::Interface,
+            Exposure::Loopback,
+            Exposure::Loopback,
+        ],
         "exposed first, then interface, then loopback"
+    );
+}
+
+#[test]
+fn exposure_orders_the_attack_surface_first() {
+    // The ordering the sort depends on, pinned directly rather than
+    // implicitly through a sorted list.
+    assert!(Exposure::Exposed < Exposure::Interface);
+    assert!(Exposure::Interface < Exposure::Loopback);
+}
+
+#[test]
+fn classifies_an_ipv4_mapped_wildcard_as_exposed() {
+    // A dual-stack listener bound to an IPv4 address appears in
+    // /proc/net/tcp6 as ::ffff:0.0.0.0. Classifying it by its IPv6 shape
+    // called a wildcard bind interface-specific and sorted it below
+    // loopback — the view hiding the exposure it exists to show.
+    assert_eq!(
+        Exposure::of(&"[::ffff:0.0.0.0]:80".parse().unwrap()),
+        Exposure::Exposed
+    );
+    assert_eq!(
+        Exposure::of(&"[::ffff:127.0.0.1]:80".parse().unwrap()),
+        Exposure::Loopback
+    );
+    assert_eq!(
+        Exposure::of(&"[::ffff:10.0.0.5]:80".parse().unwrap()),
+        Exposure::Interface
     );
 }
 
@@ -188,7 +238,5 @@ fn orders_by_port_within_an_exposure_class() {
         .filter(|s| s.exposure() == Exposure::Exposed)
         .map(|s| s.local.port())
         .collect();
-    let mut sorted = exposed.clone();
-    sorted.sort();
-    assert_eq!(exposed, sorted);
+    assert_eq!(exposed, vec![5434, 65535]);
 }

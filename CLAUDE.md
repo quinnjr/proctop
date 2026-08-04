@@ -31,7 +31,7 @@ committing.
 ## Commands
 
 ```bash
-cargo test                                   # everything (293 tests)
+cargo test                                   # everything
 cargo test --test keymap                     # one integration test file
 cargo test --test keymap a_single_d_opens    # one test by (partial) name
 cargo test --lib                             # unit tests inside src/
@@ -67,7 +67,7 @@ parser means adding a `&str -> T` function and a fixture, not a mock.
 ### Data flow, one frame
 
 ```
-Sampler::sample(want_sensors)     blocking /proc reads on spawn_blocking
+Sampler::sample(Wanted)          blocking /proc reads on spawn_blocking
   → Sample                        rates already derived; the UI does no accounting arithmetic
   → State<Shared<Sample>>         Shared compares by Arc::ptr_eq, not by value
   → App::render
@@ -109,18 +109,22 @@ Most of these are here because something already went wrong.
   recycles PIDs. This applies to deltas *and* to destructive actions:
   `actions::kill_if_unchanged` / `renice_if_unchanged` re-verify before
   signalling, because a dialog can sit open while its process exits.
-- **Guest time is subtracted from `user`/`nice` before deltas.** The kernel
-  counts it in both places; not subtracting shrinks every percentage on a
-  virtualization host. Applies to `cpu_usage` *and* to `total_jiffies`, the
-  denominator.
+- **Guest time is counted twice by the kernel, and the two corrections are
+  different.** `cpu_usage` *subtracts* it out of `user`/`nice` and reports
+  it as its own bucket. `total_jiffies` — the denominator — corrects by
+  *omitting* the guest columns from the sum, and must not also subtract
+  them: doing both removes guest time twice and inflates every percentage
+  on a virtualization host.
 - **Arithmetic on the sampling path saturates.** A debug-build overflow is a
   panic, and `ntui` swallows panics in `spawn_blocking` tasks — so it
   manifests as a UI that silently stops updating with no error anywhere.
   Same reason there is no `unwrap`/`expect` on that path.
 - **`None` and `Some(vec![])` mean different things** for `Sample::disks`,
-  `nets`, and `sensors`: "could not read" versus "this machine genuinely has
-  none". They render differently. `mem`/`load`/`uptime` are deliberately not
-  `Option` — procfs guarantees those files.
+  `nets`, `sensors`, and `sockets`: "not read" versus "this machine
+  genuinely has none". They render differently. For the two gated
+  subsystems `None` is usually "this tab just opened", so the notice says
+  so rather than claiming unavailability. `mem`/`load`/`uptime` are
+  deliberately not `Option` — procfs guarantees those files.
 - **Each counter stream owns its baseline timestamp.** A shared clock that
   advances on a failed read makes the next successful tick divide two
   intervals of counters by one and report double the throughput.
@@ -129,6 +133,10 @@ Most of these are here because something already went wrong.
   defeats `props_eq` permanently — the exact cost the type exists to avoid.
 - **A `use_memo` dep tuple must cover everything the body reads.** Anything
   missing is stale data shown to the user.
+- **`network::socket_capacity()` must equal the rows `NetworkView` draws.**
+  `App` clamps the socket cursor with it and the renderer windows with it;
+  disagree and the cursor scrolls rows off with no key to recover them.
+  One function, called with the same argument the `height` prop carries.
 - **`meters::height()` must equal what `Meters` actually renders**, and the
   row budget is passed to it as a prop. A clamp the component never sees
   shrinks the arithmetic without shrinking the header, and the chrome gets
@@ -163,13 +171,16 @@ Most of these are here because something already went wrong.
 
 - A broken config is fatal and reported; a missing one is fine. Unknown keys
   are rejected — a setting that appears not to work with nothing saying why
-  is worse than a refusal to start. Same rule for theme files.
+  is worse than a refusal to start. Themes are bundled with `include_str!`
+  and selected by name; there is no user theme file to parse.
 - `/proc` read failures are normal, not exceptional: a per-process error
   drops that process silently, a per-subsystem error degrades that view.
   Only config-parse and terminal-init are fatal.
 - The README's Keys table and `ui::help::BINDINGS` are both claims about
-  behavior. A test checks the help entries against the keymap and that each
-  fits its rendered column; the README is checked by hand.
+  behavior. A test checks each entry fits its rendered column and that
+  every entry appears in `help.rs`'s hand-maintained `BOUND` list — which
+  is not derived from `handle_key`, so deleting a keymap arm fails nothing.
+  Both the README and that list are checked by hand.
 - rtop keeps its own `ProcessTable` rather than using `ntui::widgets::Table`:
   it right-aligns numeric columns and truncates them from the *left*,
   left-aligns text ones, and prefixes tree guides at depth. None of that is

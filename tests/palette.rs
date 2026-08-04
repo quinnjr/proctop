@@ -96,3 +96,24 @@ fn rejects_multibyte_hex_of_every_length_without_panicking() {
         assert!(result.is_err(), "{text} should be rejected");
     }
 }
+
+#[test]
+fn an_unmeasurable_load_is_muted_rather_than_alarming() {
+    // NaN CPU is a real input — a process seen for the first time between
+    // two samples has no delta. Every comparison is false for NaN, so it
+    // must land on the last arm rather than on `alert`.
+    let p = Palette::default();
+
+    assert_eq!(p.cpu_load(f32::NAN), p.muted);
+    assert_eq!(p.mem_load(f32::NAN), p.text);
+}
+
+#[test]
+fn cpu_load_colours_each_band() {
+    let p = Palette::default();
+
+    assert_eq!(p.cpu_load(0.0), p.muted);
+    assert_eq!(p.cpu_load(0.05), p.text);
+    assert_eq!(p.cpu_load(0.1), p.warn);
+    assert_eq!(p.cpu_load(0.5), p.alert);
+}

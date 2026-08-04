@@ -17,7 +17,7 @@ APIs this project's dogfooding produced.
 cargo run --release
 ```
 
-Three tabs — processes, I/O, sensors — plus search, a command line, a
+Four tabs — processes, disk, network, sensors — plus search, a command line, a
 detail pane, kill and renice, tree view, a config file, and themes. All
 seven phases of [the plan](docs/superpowers/specs/2026-08-04-rtop-design.md#9-implementation-phases)
 are built.

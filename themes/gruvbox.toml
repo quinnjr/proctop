@@ -7,7 +7,6 @@ cpu_irq    = "#d3869b"
 cpu_iowait = "#8ec07c"
 
 mem_used  = "#b8bb26"
-mem_cache = "#fabd2f"
 swap      = "#fb4934"
 
 label     = "#83a598"

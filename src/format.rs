@@ -46,8 +46,10 @@ pub fn bytes(n: u64) -> String {
 /// Render accumulated CPU time, given in jiffies, as htop's TIME+ column.
 ///
 /// Below an hour the hundredths are shown, because that is the resolution
-/// that distinguishes short-lived processes. Past an hour they are dropped
-/// so the column keeps a fixed width.
+/// that distinguishes short-lived processes. Past an hour they are dropped,
+/// which keeps the column from growing without bound — the width is not
+/// fixed (`9:59.99` and `1h00:00` differ), just capped in practice, and the
+/// column pads it to alignment.
 pub fn cpu_time(jiffies: u64) -> String {
     let total_seconds = jiffies / USER_HZ;
     let hundredths = jiffies % USER_HZ;
