@@ -47,9 +47,13 @@ pub fn bytes(n: u64) -> String {
 ///
 /// Below an hour the hundredths are shown, because that is the resolution
 /// that distinguishes short-lived processes. Past an hour they are dropped,
-/// which keeps the column from growing without bound — the width is not
-/// fixed (`9:59.99` and `1h00:00` differ), just capped in practice, and the
-/// column pads it to alignment.
+/// which trades them for the hour count.
+///
+/// The width is not fixed and not bounded: `9:59.99` is 7, `1h00:00` is 7,
+/// and `1000h00:00` is 10 — reachable after about six weeks of one saturated
+/// core. The column pads to alignment and, being numeric, truncates from the
+/// left, so an extreme value loses its high-order hours rather than its
+/// shape.
 pub fn cpu_time(jiffies: u64) -> String {
     let total_seconds = jiffies / USER_HZ;
     let hundredths = jiffies % USER_HZ;

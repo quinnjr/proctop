@@ -6,6 +6,7 @@
 
 use ntui::testing::TestTerminal;
 use ntui::{KeyCode, element};
+use proctop::model::ProcRow;
 use proctop::ui::app::{App, AppProps};
 
 fn app() -> TestTerminal {
@@ -456,5 +457,82 @@ async fn scrolling_the_process_list_does_not_scroll_the_sockets_away() {
     assert!(
         socket_rows > 0,
         "the listening list rendered no socket rows:\n{text}"
+    );
+}
+
+// ---------- the permission warning, end to end ----------
+
+#[test]
+fn the_warning_names_a_process_we_genuinely_cannot_signal() {
+    // pid 1 is root-owned on every Linux. Under root the refusal does not
+    // happen, and the test would be asserting the wrong thing.
+    if proctop::actions::our_euid() == 0 {
+        return;
+    }
+    let init = ProcRow {
+        proc: proctop::model::Proc {
+            pid: 1,
+            ..Default::default()
+        },
+        user: "root".into(),
+        uid: Some(0),
+        ..ProcRow::default()
+    };
+
+    assert_eq!(
+        proctop::ui::app::foreign_owner(&init),
+        Some("root".to_string()),
+        "pid 1 is not ours to signal"
+    );
+}
+
+#[test]
+fn no_warning_for_a_process_we_can_signal() {
+    // Ourselves — the one pid we are guaranteed to be allowed to signal.
+    let ours = ProcRow {
+        proc: proctop::model::Proc {
+            pid: std::process::id() as i32,
+            ..Default::default()
+        },
+        user: "joseph".into(),
+        uid: Some(proctop::actions::our_euid()),
+        ..ProcRow::default()
+    };
+
+    assert_eq!(proctop::ui::app::foreign_owner(&ours), None);
+}
+
+#[test]
+fn a_process_that_vanished_is_not_reported_as_a_permission_problem() {
+    // The dialog reports an exited process on its own line; a permission
+    // warning on top of that would be two explanations for one fact.
+    let gone = ProcRow {
+        proc: proctop::model::Proc {
+            pid: 0x3FFF_FFFF,
+            ..Default::default()
+        },
+        user: "joseph".into(),
+        ..ProcRow::default()
+    };
+
+    assert_eq!(proctop::ui::app::foreign_owner(&gone), None);
+}
+
+#[test]
+fn a_refused_action_reaches_the_status_bar_with_the_remedy() {
+    // Pins the wiring, not just `explain` in isolation: reverting the call
+    // site to `{e}` used to leave the whole suite green.
+    let refused: std::io::Result<()> = Err(std::io::Error::from_raw_os_error(libc::EPERM));
+
+    let line = proctop::ui::app::action_status("SIGTERM", 1, &refused);
+
+    assert!(line.starts_with("SIGTERM to 1: "), "{line}");
+    assert!(
+        line.contains("root"),
+        "the remedy must survive the wiring: {line}"
+    );
+    assert_eq!(
+        proctop::ui::app::action_status("SIGTERM", 1, &Ok(())),
+        "sent SIGTERM to 1"
     );
 }

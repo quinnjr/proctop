@@ -22,7 +22,10 @@ fn rows(n: usize) -> Vec<ProcRow> {
                 ..Proc::default()
             },
             user: if i % 2 == 0 { "root" } else { "joseph" }.into(),
-            uid: Some(1000),
+            // Derived, not a constant: `uid` and `user` name the same fact,
+            // and a row where they disagree makes the kill dialog warn about
+            // the wrong person.
+            uid: Some(if i % 2 == 0 { 0 } else { 1000 }),
             ..ProcRow::default()
         })
         .collect()
@@ -714,7 +717,7 @@ impl Net {
         handle_key(
             &mut self.state,
             KeyEvent::new(code, KeyModifiers::NONE),
-            Lists::processes(&self.rows, HEIGHT).with_sockets(&self.sockets, HEIGHT),
+            Lists::processes(&self.rows, HEIGHT).with_sockets(self.sockets.len(), HEIGHT),
         );
     }
 }

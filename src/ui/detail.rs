@@ -109,11 +109,13 @@ fn state_name(p: &crate::model::Proc) -> &'static str {
 pub struct KillProps {
     pub pid: i32,
     pub name: String,
-    /// The owning username, when the signal is expected to be refused.
+    /// The owning username, when the kernel says the signal would be
+    /// refused. `None` when it would be permitted, which covers both "we
+    /// own it" and "we are root".
     ///
-    /// `None` covers both "we own it" and "we are root", because neither
-    /// needs a warning. It is a hint rather than a verdict — see
-    /// [`crate::actions::may_signal`] — so the signals stay on offer.
+    /// The signals stay on offer regardless: the check is a separate
+    /// `kill(pid, 0)` and the process's permissions can change between it
+    /// and the real signal.
     pub owner: Option<String>,
     /// Index into [`SIGNALS`].
     pub index: usize,
@@ -143,7 +145,7 @@ impl Component for Kill {
         // taller than the others and raise the terminal height it needs.
         if let Some(owner) = &props.owner {
             body.push(overlay::row(
-                format!("Owned by {owner} — run proctop as root to signal it."),
+                format!("Needs root — owned by {}.", clip(owner, 30)),
                 palette.warn,
                 Weight::Normal,
                 palette,
@@ -277,4 +279,20 @@ impl Component for Renice {
             ],
         )
     }
+}
+
+/// Shorten `text` to `width` characters, marking that it was cut.
+///
+/// The panel row truncates silently at [`overlay::PANEL_WIDTH`], and the
+/// warning's actionable half is the fixed part — so the variable part is
+/// clipped here, visibly, rather than letting a long service account push
+/// "needs root" off the end.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    text.chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "…"
 }

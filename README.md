@@ -58,12 +58,17 @@ mean the same thing in the config file, in `--sort`, and in `:sort`.
 a destructive action to a navigation key in a list you are actively
 scrolling is a footgun.
 
-Signalling and renicing follow the kernel's rules, not proctop's: your own
-processes always, anything on the machine when run as root, `EPERM`
-otherwise. The kill dialog says so before you confirm rather than after —
-though it is a warning, not a refusal, because `/proc` shows a process's
-effective uid while the kernel will also accept a match against its
-saved-set uid. The syscall stays the authority.
+Signalling follows the kernel's rules, not proctop's: your own processes
+always, anything on the machine when run as root, `EPERM` otherwise. The
+kill dialog asks the kernel — `kill(pid, 0)`, which performs exactly the
+existence and permission check and delivers nothing — and says so before
+you confirm rather than after. It is still a warning and not a refusal:
+permissions can change between that check and the signal.
+
+Renicing is asymmetric and ownership does not govern it. Raising a nice
+value is always permitted; lowering one needs `CAP_SYS_NICE` **even for a
+process you own**, so it can fail on a process the kill dialog raises no
+warning about.
 
 ## What it measures
 

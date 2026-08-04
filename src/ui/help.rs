@@ -34,6 +34,7 @@ pub const BINDINGS: &[(&str, &str)] = &[
     (":filter <text>", "set the search filter"),
     (":user <name>", "filter by user"),
     (":tree", "toggle tree view"),
+    (":help", "this overlay"),
     (":q", "quit"),
     ("", "Leave"),
     ("q", "quit"),

@@ -199,6 +199,13 @@ fn parse_color(text: &str) -> Option<Color> {
         if hex.len() != 6 || !hex.is_ascii() {
             return None;
         }
+        // `from_str_radix` accepts a leading `+`, so "#+1+2+3" would parse
+        // as a colour rather than being reported as the typo it is — and a
+        // setting that silently does something else is what this project
+        // refuses to ship.
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
         let byte = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
         return Some(Color::Rgb(byte(0..2)?, byte(2..4)?, byte(4..6)?));
     }

@@ -34,6 +34,12 @@ pub fn parse_passwd(text: &str) -> UserTable {
     let mut names = HashMap::new();
 
     for line in text.lines() {
+        // A commented-out entry is still a well-formed record: without this
+        // `#nobody:x:65534:...` parses as a user literally named "#nobody"
+        // and, because the map is last-wins, can displace the real one.
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
         let mut fields = line.split(':');
         let (Some(name), Some(_passwd), Some(uid)) = (fields.next(), fields.next(), fields.next())
         else {

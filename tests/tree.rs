@@ -89,7 +89,10 @@ fn survives_a_parent_cycle_without_hanging() {
 
     let flattened = flatten(rows);
 
-    assert_eq!(flattened.len(), 2);
+    // Shape, not just count: cycle members are appended at depth 0, so a
+    // mutation emitting them at depth 1 would draw a tree guide under no
+    // parent and still pass a length check.
+    assert_eq!(shape(&flattened), vec![(1, 0), (2, 0)]);
 }
 
 #[test]

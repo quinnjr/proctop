@@ -334,6 +334,12 @@ pub struct ListeningSocket {
 
 /// A process plus the figures derived from comparing it against the previous
 /// sample. This is what the table renders.
+///
+/// Deliberately *not* `#[non_exhaustive]`: that forbids struct expressions
+/// entirely for other crates — functional-update syntax included — which
+/// would push this crate's own integration tests through a constructor for
+/// no outside benefit. The cost is that adding a column is a breaking
+/// change; see the release note in CLAUDE.md.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProcRow {
     pub proc: Proc,
