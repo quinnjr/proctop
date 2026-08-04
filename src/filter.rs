@@ -51,7 +51,11 @@ pub fn apply(rows: Vec<ProcRow>, filter: &Filter) -> Vec<ProcRow> {
         .collect()
 }
 
-/// Match the command name case-insensitively, or the PID exactly.
+/// Match the command name case-insensitively, or the PID as a number.
+///
+/// The PID comparison is numeric rather than textual, so `4`, `004` and
+/// `+4` all find pid 4 — more forgiving than the string form it replaced,
+/// and it costs no allocation per row.
 ///
 /// Case-insensitivity matters more than it looks: typing `firefox` and
 /// getting nothing because the process is named `Firefox` reads as a broken
@@ -70,10 +74,17 @@ fn contains_ignore_case(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
         return true;
     }
-    // Command names are short and overwhelmingly ASCII, so the common case
-    // avoids allocating entirely.
-    if haystack.is_ascii() {
-        return haystack.to_ascii_lowercase().contains(needle);
+    // Command names are short and overwhelmingly ASCII, and this runs over
+    // every row on every keystroke of an incremental search — so the common
+    // case compares in place rather than lowercasing into a fresh String.
+    if haystack.is_ascii() && needle.is_ascii() {
+        let (haystack, needle) = (haystack.as_bytes(), needle.as_bytes());
+        if needle.len() > haystack.len() {
+            return false;
+        }
+        return haystack
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle));
     }
     haystack.to_lowercase().contains(needle)
 }

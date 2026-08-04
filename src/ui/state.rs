@@ -11,7 +11,7 @@ use crate::actions::{NICE_MAX, NICE_MIN, SIGNALS, Signal};
 use crate::filter::Filter;
 use crate::model::{ProcKey, ProcRow};
 use crate::sort::SortKey;
-use crate::ui::selection::Selection;
+use crate::ui::Selection;
 
 /// Which view is on screen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -157,10 +157,13 @@ fn handle_normal_key(
 
     // A multi-key sequence in progress claims this key, whether or not it
     // completes. Taken unconditionally so any other key abandons it rather
-    // than leaving a prefix armed for later.
-    // Anything other than the completing key falls through and is treated as
-    // its own key, so an interrupted sequence costs nothing.
-    if state.pending.take() == Some('d') && key.code == KeyCode::Char('d') {
+    // than leaving a prefix armed for later; anything that is not the
+    // completion falls through and is treated as its own key.
+    //
+    // The modifier check is load-bearing: Ctrl-D's `KeyCode` is also
+    // `Char('d')`, so comparing the code alone let the documented
+    // half-page-down key finish `dd` and open a destructive dialog.
+    if state.pending.take() == Some('d') && is_plain(&key, 'd') {
         if let Some(row) = state.selected(rows) {
             state.overlay = Overlay::Kill {
                 key: row.proc.key(),
@@ -178,7 +181,7 @@ fn handle_normal_key(
             // search does not become a way to accidentally exit.
             if state.filter.is_active() {
                 state.filter = Filter::default();
-                state.selection.to_top();
+                state.selection.to_start();
             } else {
                 return Effect::Quit;
             }
@@ -190,8 +193,8 @@ fn handle_normal_key(
         KeyCode::Char('u') if ctrl(&key) => state.selection.move_by(-page / 2, len, height),
         KeyCode::PageDown => state.selection.move_by(page, len, height),
         KeyCode::PageUp => state.selection.move_by(-page, len, height),
-        KeyCode::Char('g') | KeyCode::Home => state.selection.to_top(),
-        KeyCode::Char('G') | KeyCode::End => state.selection.to_bottom(len, height),
+        KeyCode::Char('g') | KeyCode::Home => state.selection.to_start(),
+        KeyCode::Char('G') | KeyCode::End => state.selection.to_end(len, height),
 
         KeyCode::Char('/') => state.mode = Mode::Search(state.filter.query.clone()),
         KeyCode::Char(':') => state.mode = Mode::Command(String::new()),
@@ -201,24 +204,24 @@ fn handle_normal_key(
         // to the top rather than landing somewhere arbitrary.
         KeyCode::Char('<') => {
             state.sort = step_sort(state.sort, -1);
-            state.selection.to_top();
+            state.selection.to_start();
         }
         KeyCode::Char('>') => {
             state.sort = step_sort(state.sort, 1);
-            state.selection.to_top();
+            state.selection.to_start();
         }
         KeyCode::Char('I') => {
             state.descending = !state.descending;
-            state.selection.to_top();
+            state.selection.to_start();
         }
 
         KeyCode::Char('t') => {
             state.tree_view = !state.tree_view;
-            state.selection.to_top();
+            state.selection.to_start();
         }
         KeyCode::Char('H') => {
             state.filter.hide_kernel_threads = !state.filter.hide_kernel_threads;
-            state.selection.to_top();
+            state.selection.to_start();
         }
         // Filter to the selected process's owner, or clear that filter if
         // it is already on.
@@ -227,7 +230,7 @@ fn handle_normal_key(
                 Some(_) => None,
                 None => state.selected(rows).map(|r| r.user.to_string()),
             };
-            state.selection.to_top();
+            state.selection.to_start();
         }
 
         KeyCode::Tab | KeyCode::Char('\t') => state.tab = step_tab(state.tab, 1),
@@ -247,7 +250,7 @@ fn handle_normal_key(
         // (handled above) opens the confirmation. Two keystrokes plus a
         // confirmation, and deliberately not `k`, which is navigation in a
         // list being actively scrolled.
-        KeyCode::Char('d') => state.pending = Some('d'),
+        KeyCode::Char('d') if !ctrl(&key) => state.pending = Some('d'),
         KeyCode::Char('n') => {
             if let Some(row) = state.selected(rows) {
                 state.overlay = Overlay::Renice {
@@ -284,7 +287,7 @@ fn handle_search_key(state: &mut UiState, key: KeyEvent) -> Effect {
         }
         _ => return Effect::None,
     }
-    state.selection.to_top();
+    state.selection.to_start();
     Effect::None
 }
 
@@ -324,12 +327,12 @@ fn run_command(state: &mut UiState, command: &str) -> Effect {
         "q" | "quit" => return Effect::Quit,
         "tree" => {
             state.tree_view = !state.tree_view;
-            state.selection.to_top();
+            state.selection.to_start();
         }
         "sort" => match argument.and_then(SortKey::from_word) {
             Some(key) => {
                 state.sort = key;
-                state.selection.to_top();
+                state.selection.to_start();
             }
             None => {
                 state.notice = Some(format!(
@@ -341,11 +344,11 @@ fn run_command(state: &mut UiState, command: &str) -> Effect {
         },
         "filter" => {
             state.filter.query = argument.unwrap_or_default().to_string();
-            state.selection.to_top();
+            state.selection.to_start();
         }
         "user" => {
             state.filter.user = argument.map(str::to_string);
-            state.selection.to_top();
+            state.selection.to_start();
         }
         "help" => state.overlay = Overlay::Help,
         other => state.notice = Some(format!("unknown command: {other}")),
@@ -444,4 +447,16 @@ fn step_tab(current: Tab, by: isize) -> Tab {
 
 fn ctrl(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Whether this is `c` pressed with no modifier holding it down.
+///
+/// Multi-key sequences must match on the whole event, not just the code:
+/// several `KeyCode::Char(_)` values are shared with their control-modified
+/// forms, so a code-only comparison silently accepts the wrong key.
+fn is_plain(key: &KeyEvent, c: char) -> bool {
+    key.code == KeyCode::Char(c)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 }

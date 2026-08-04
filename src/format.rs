@@ -7,7 +7,13 @@ use std::time::Duration;
 /// Linux for every architecture rtop targets.
 const USER_HZ: u64 = 100;
 
-/// Render a byte count in the largest unit that keeps it under four digits.
+/// Render a byte count in the largest unit that keeps it to four characters
+/// of value or fewer — `999B`, `1.0K`, `128M`, `1023K`.
+///
+/// Not *three*: the band from 1000 to 1023 stays in the smaller unit,
+/// because 1023K is more informative than 1.0M and the column is budgeted
+/// for four either way. What the bound below rules out is the rounding case
+/// where a value under 1024 would print as `1024K`.
 ///
 /// The decimal is dropped once the value reaches 10, where it stops adding
 /// information: in a table column, `128M` says as much as `128.4M` in one

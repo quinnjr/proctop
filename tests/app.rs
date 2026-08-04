@@ -305,3 +305,50 @@ fn row_count(text: &str) -> usize {
         })
         .count()
 }
+
+#[tokio::test]
+async fn the_chrome_survives_a_terminal_too_short_for_the_header() {
+    // The clamp used to shrink only the number App subtracted, while Meters
+    // went on rendering its full height — so the arithmetic stopped
+    // describing the screen and the tab bar and status bar were squeezed.
+    for rows in [4u16, 6, 8, 12] {
+        let mut t = TestTerminal::new(120, rows, element!(App)).expect("should mount");
+        t.tick().await.expect("should tick");
+
+        let text = t.frame_text();
+        assert!(
+            text.contains("q quit"),
+            "status bar missing at {rows} rows:\n{text}"
+        );
+        assert!(
+            text.contains("1:Processes"),
+            "tab bar missing at {rows} rows:\n{text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_open_dialog_is_opaque_over_the_process_table() {
+    // The kill dialog once rendered transparently and the table showed
+    // through it — invisible to `frame_text`, which carries no styling.
+    // This is the assertion that gap was closed for.
+    let mut t = sampled().await;
+    t.send_key(KeyCode::Char('d')).expect("should accept input");
+    t.send_key(KeyCode::Char('d')).expect("should accept input");
+    assert!(t.frame_text().contains("Send signal"));
+
+    let palette = rtop::ui::palette::Palette::default();
+    let text = t.frame_text();
+    let (row, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("SIGTERM"))
+        .expect("the signal list is on screen");
+    let col = line.find("SIGTERM").expect("found above") as u16;
+
+    let cell = t.cell(col, row as u16).expect("in bounds");
+    assert_eq!(
+        cell.bg, palette.panel_bg,
+        "the panel must paint its own background, not let the table show through"
+    );
+}

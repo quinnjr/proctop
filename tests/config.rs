@@ -188,3 +188,24 @@ fn rejects_a_word_that_is_not_a_column_at_every_entry_point() {
     assert_eq!(SortKey::from_word("nonsense"), None);
     assert!(Config::parse("[processes]\nsort_by = \"nonsense\"").is_err());
 }
+
+#[test]
+fn every_columns_canonical_name_round_trips() {
+    // `canonical` is the name a config would be written back as, so it has
+    // to be one `from_word` accepts — and the two tables are maintained
+    // separately.
+    for (key, spellings) in SortKey::SPELLINGS {
+        assert_eq!(
+            SortKey::from_word(key.canonical()),
+            Some(key),
+            "{:?} canonicalises to {:?}, which does not parse",
+            key,
+            key.canonical()
+        );
+        assert_eq!(
+            key.canonical(),
+            spellings[0],
+            "canonical should be the first spelling listed"
+        );
+    }
+}

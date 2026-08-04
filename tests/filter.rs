@@ -143,3 +143,52 @@ fn reports_whether_it_would_filter_anything() {
         .is_active()
     );
 }
+
+#[test]
+fn matches_a_pid_written_with_leading_zeros_or_a_sign() {
+    // The comparison is numeric, not textual — documented on matches_query.
+    for query in ["4", "004", "+4"] {
+        let filter = Filter {
+            query: query.to_string(),
+            ..Filter::default()
+        };
+        assert_eq!(
+            names(&apply(sample(), &filter)),
+            vec!["Firefox"],
+            "query {query:?}"
+        );
+    }
+}
+
+#[test]
+fn a_non_ascii_query_still_matches_case_insensitively() {
+    // The ASCII fast path must not be reached for either side here.
+    let mut rows = sample();
+    rows[0].proc.name = "ÜBERPROC".to_string();
+    let filter = Filter {
+        query: "über".to_string(),
+        ..Filter::default()
+    };
+
+    assert_eq!(names(&apply(rows, &filter)), vec!["ÜBERPROC"]);
+}
+
+#[test]
+fn an_ascii_name_does_not_match_a_non_ascii_query() {
+    let filter = Filter {
+        query: "zß".to_string(),
+        ..Filter::default()
+    };
+
+    assert!(apply(sample(), &filter).is_empty());
+}
+
+#[test]
+fn a_query_longer_than_the_name_matches_nothing() {
+    let filter = Filter {
+        query: "systemd-and-then-some".to_string(),
+        ..Filter::default()
+    };
+
+    assert!(apply(sample(), &filter).is_empty());
+}

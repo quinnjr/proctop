@@ -39,12 +39,18 @@ impl SortKey {
     }
 
     /// The canonical spelling, for error messages and round-tripping.
+    ///
+    /// An exhaustive `match` rather than a lookup with a fallback: a new
+    /// variant should fail to compile here, not silently label itself
+    /// `"cpu"`.
     pub fn canonical(self) -> &'static str {
-        SortKey::SPELLINGS
-            .iter()
-            .find(|(key, _)| *key == self)
-            .map(|(_, names)| names[0])
-            .unwrap_or("cpu")
+        match self {
+            SortKey::Pid => "pid",
+            SortKey::Name => "name",
+            SortKey::Cpu => "cpu",
+            SortKey::Memory => "mem",
+            SortKey::Time => "time",
+        }
     }
 
     /// Every accepted spelling, comma-separated — for help text and errors,

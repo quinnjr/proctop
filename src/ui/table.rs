@@ -14,20 +14,22 @@ use ntui::{Component, Element, Hooks};
 use crate::format;
 use crate::model::ProcRow;
 use crate::sort::SortKey;
+use crate::ui::Selection;
 use crate::ui::Shared;
 use crate::ui::palette::Palette;
-use crate::ui::selection::Selection;
 
 /// A fixed-width column of the table.
-struct Column {
-    header: &'static str,
-    width: u16,
+pub struct Column {
+    pub header: &'static str,
+    pub width: u16,
     /// Whether the cell content is right-aligned, as numbers should be.
-    numeric: bool,
-    sort: Option<SortKey>,
+    pub numeric: bool,
+    /// The column the sort marker highlights for this key. At most one
+    /// column may claim any given key, or the marker names neither.
+    pub sort: Option<SortKey>,
 }
 
-const COLUMNS: [Column; 10] = [
+pub const COLUMNS: [Column; 10] = [
     Column {
         header: "PID",
         width: 7,
@@ -76,11 +78,13 @@ const COLUMNS: [Column; 10] = [
         numeric: true,
         sort: Some(SortKey::Cpu),
     },
+    // Deliberately unmarked: `SortKey::Memory` orders by RES, and marking
+    // both would leave the sort indicator naming no single column.
     Column {
         header: "MEM%",
         width: 5,
         numeric: true,
-        sort: Some(SortKey::Memory),
+        sort: None,
     },
     Column {
         header: "TIME+",
@@ -91,8 +95,10 @@ const COLUMNS: [Column; 10] = [
 ];
 
 /// The command column is not in `COLUMNS` because it takes the remaining
-/// width rather than a fixed one.
-const COMMAND_HEADER: &str = "Command";
+/// width rather than a fixed one — but it is still a sortable column, and
+/// still has to carry the marker when it is the one driving the order.
+pub const COMMAND_HEADER: &str = "Command";
+pub const COMMAND_SORT: Option<SortKey> = Some(SortKey::Name);
 
 /// Cells of indent per tree level. Two reads as nesting without pushing long
 /// command lines off the right edge.
@@ -173,11 +179,24 @@ fn header_row(sort: SortKey, palette: &Palette) -> Element {
             },
         ));
     }
+    let command_active = COMMAND_SORT == Some(sort);
     cells.push(cell_flex(
         COMMAND_HEADER,
-        palette.header_fg,
-        Weight::Normal,
-        palette.header_bg,
+        if command_active {
+            palette.selected_fg
+        } else {
+            palette.header_fg
+        },
+        if command_active {
+            Weight::Bold
+        } else {
+            Weight::Normal
+        },
+        if command_active {
+            palette.selected_bg
+        } else {
+            palette.header_bg
+        },
     ));
 
     Element::view(

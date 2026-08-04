@@ -37,7 +37,7 @@ pub const BINDINGS: &[(&str, &str)] = &[
     (":q", "quit"),
     ("", "Leave"),
     ("q", "quit"),
-    ("Esc", "clear the filter, else quit"),
+    ("Esc", "close an overlay, else clear the filter, else quit"),
     ("", ""),
     ("? / any key", "close this help"),
 ];
@@ -49,6 +49,11 @@ pub const BINDINGS: &[(&str, &str)] = &[
 /// honest: a binding can be renamed or removed and the help will go on
 /// advertising it. This is the list the test compares against, kept beside
 /// the text it checks.
+///
+/// It catches one direction only — help advertising a key that is gone. A
+/// key that is bound but undocumented passes, and so does an entry added
+/// here without a matching binding, since this list is maintained by hand
+/// rather than derived from `handle_key`.
 pub fn is_documented_key(key: &str) -> bool {
     const BOUND: &[&str] = &[
         // movement

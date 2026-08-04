@@ -61,10 +61,14 @@ pub fn row(content: impl Into<String>, color: Color, weight: Weight, palette: &P
     )
 }
 
+/// Width of the label column in a [`field`] row.
+///
+/// Labels are truncated to it, so anything longer is silently cut on
+/// screen — a test pins the help overlay's keys against this.
+pub const LABEL_WIDTH: u16 = 20;
+
 /// A `label: value` row, with the labels aligned into a column.
 pub fn field(label: &str, value: impl Into<String>, palette: &Palette) -> Element {
-    const LABEL_WIDTH: u16 = 15;
-
     Element::view(
         ViewProps {
             flex_direction: FlexDirection::Row,

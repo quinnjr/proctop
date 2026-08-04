@@ -42,7 +42,7 @@ fn shows_small_sizes_in_bytes() {
 }
 
 #[test]
-fn scales_to_the_largest_unit_that_stays_under_four_digits() {
+fn scales_to_the_largest_unit_that_fits_the_column() {
     assert_eq!(bytes(1024), "1.0K");
     assert_eq!(bytes(1536), "1.5K");
     assert_eq!(bytes(1024 * 1024), "1.0M");
@@ -50,7 +50,7 @@ fn scales_to_the_largest_unit_that_stays_under_four_digits() {
 }
 
 #[test]
-fn advances_a_unit_before_the_rounded_value_reaches_four_digits() {
+fn advances_a_unit_before_rounding_would_overflow_the_column() {
     // The loop advances at >= 1024, but `{:.0}` rounds — so a value in
     // 1023.5..1024.0 printed four digits in the smaller unit.
     assert_eq!(bytes(1_048_575), "1.0M");
@@ -67,7 +67,7 @@ fn keeps_scaling_past_terabytes() {
 }
 
 #[test]
-fn never_prints_more_than_four_digits_of_value() {
+fn never_prints_more_than_four_characters_of_value() {
     for shift in 0..64 {
         let n = 1u64 << shift;
         for candidate in [n, n.saturating_sub(1), n.saturating_add(1), u64::MAX] {

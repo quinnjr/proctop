@@ -28,6 +28,13 @@ pub struct MetersProps {
     pub palette: Palette,
     /// Terminal width, which decides how many meter columns fit.
     pub width: u16,
+    /// Rows the header may occupy, summary line included. `0` means
+    /// unbounded, which is what a caller that has not measured wants.
+    ///
+    /// The header gives up meters rather than pushing the tab bar and
+    /// status bar off the bottom: a user who cannot see which tab they are
+    /// on is worse off than one who cannot see every core.
+    pub max_rows: u16,
 }
 
 pub struct Meters;
@@ -54,7 +61,7 @@ impl Component for Meters {
         // Fill each column top to bottom, the way htop does, so core 0 and
         // core 1 sit next to each other vertically rather than across the
         // screen from each other.
-        let rows = rows_per_column(cores.len(), props.width);
+        let rows = rows_per_column(cores.len(), props.width).min(meter_rows(props.max_rows));
         // How many columns the terminal can actually show. Meters past
         // `rows * columns` are dropped rather than allowed to grow the
         // header past its budget — see `rows_per_column`.
@@ -101,6 +108,15 @@ impl Component for Meters {
             ],
         )
     }
+}
+
+/// Rows available for meters themselves, once the summary line is paid for.
+/// A budget of `0` means unbounded.
+fn meter_rows(max_rows: u16) -> usize {
+    if max_rows == 0 {
+        return usize::MAX;
+    }
+    (max_rows as usize).saturating_sub(1).max(1)
 }
 
 /// How many rows each meter column holds.
@@ -257,8 +273,8 @@ fn summary(sample: &Sample, palette: &Palette) -> Element {
 
 /// How many terminal rows the header occupies, so the body knows how much
 /// room is left. The `+ 1` is the summary line beneath the meters.
-pub fn height(cores: usize, width: u16) -> u16 {
-    let rows = rows_per_column(cores, width);
+pub fn height(cores: usize, width: u16, max_rows: u16) -> u16 {
+    let rows = rows_per_column(cores, width).min(meter_rows(max_rows));
     // The tallest column is the full row count unless everything fits in
     // one short column.
     let items = cores + EXTRA_METERS;

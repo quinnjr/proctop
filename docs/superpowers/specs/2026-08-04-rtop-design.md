@@ -121,7 +121,7 @@ snapshot is never deep-copied on the render path.
 | `model` | `Sample`, `Proc`, `ProcRow`, `ProcKey`, `CpuTimes`, `MemInfo`, `LoadAvg` |
 | `sample::cpu` | `/proc/stat` → per-core and aggregate jiffy counters |
 | `sample::memory` | `/proc/meminfo` → total/free/buffers/cached/swap |
-| `sample::process` | `/proc/[pid]/{stat,status}` → `Proc` |
+| `sample::process` | `/proc/[pid]/stat` → `Proc` |
 | `sample::system` | `/proc/loadavg`, `/proc/uptime` |
 | `sample::users` | `/etc/passwd` → uid to username |
 | `sample::disk` | `/proc/diskstats` → per-device sector counters *(phase 5)* |
@@ -502,6 +502,62 @@ covered a doubled interval) and started a fresh loop that sampled
 immediately — so holding Tab sampled far faster than `refresh_ms`. Whether
 to read sensors is a parameter of a sample, passed through an atomic, not a
 reason to tear the loop down.
+
+## 11. Second audit — 2026-08-04
+
+A re-audit of 177 units, run against the state left by §10, checked whether
+those 37 fixes held and what they broke. 149 conformed; 31 findings, of
+which **two were regressions introduced by the first round** and three were
+fixes reported as landed that had not.
+
+**`Ctrl-D` opened the kill dialog.** The `dd` completion compared only
+`KeyCode`, and Ctrl-D's code *is* `Char('d')` — so the documented
+half-page-down key finished the sequence and opened a destructive dialog.
+The completion now requires an unmodified key, and the test that was
+supposed to cover this used `j`, which never exercised a modifier.
+
+**The uid optimization changed semantics.** `/proc/<pid>` is owned by the
+process's *effective* uid (`task_dump_owner()` reads `cred->euid`), not its
+real one, so a setuid process was silently reattributed. Kept, because it
+is what htop shows and the speedup is large, but every claim that said
+"real uid" is corrected and `parse_status_uid` is deleted rather than left
+as dead code with two green tests asserting semantics the binary no longer
+had.
+
+Three fixes had not actually landed:
+
+- **`MEM%` still claimed `SortKey::Memory`** — `cargo fmt` reformatted the
+  array before the edit ran, the pattern missed, and it was reported fixed
+  without checking. A test now asserts exactly one column claims each key,
+  which also caught that the Command column was never marked at all.
+- **The `App` header clamp was inert.** It shrank the number App subtracted
+  while `Meters` went on rendering its full height, so `body_rows` was
+  over-stated instead. `Meters` now takes the budget as a prop, and the body
+  is omitted entirely when there is no room for it — every view draws its
+  own header, which costs a row a 4-line terminal does not have.
+- **`format::bytes` still printed four digits** in the `1000..1023` band.
+  The property test asserted `digits <= 4`, encoding "no more than four"
+  rather than the doc's "under four" — the test was weaker than the claim it
+  was meant to pin. The claim is now the accurate one.
+
+**The `Option<Vec<IoRate>>` change had a regression of its own**: the sample
+clock advanced on a failed read while the counter baseline did not, so the
+tick after a transient failure divided two intervals of counters by one and
+reported roughly double the true throughput. Each stream now carries its own
+baseline timestamp, pinned by a test that fails on the spike.
+
+Also: `verify_unchanged` reported `EACCES` as "exited" (under `hidepid` a
+live process was declared dead); `contains_ignore_case` claimed to avoid
+allocating and did not, and now does; the `threads` accumulator was the one
+sum the saturating sweep missed; an unreadable `/proc/stat` fabricated a
+zero baseline that reported the since-boot average as the interval; and
+`ui::Selection` is now a re-export of the `ListSelection` it was upstreamed
+as, rather than a second copy of the same arithmetic.
+
+Upstream, `use_memo` did not diagnose hook-order violations the way every
+sibling hook does, and `render_once`'s documentation was wrong about
+effects — it never runs them at all, so `use_task` and `use_interval` are
+silent no-ops there rather than a runtime requirement.
 
 ## Dependencies
 

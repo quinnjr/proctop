@@ -2,10 +2,10 @@ use ntui::element;
 use ntui::testing::{TestTerminal, render_once};
 use rtop::model::{MemInfo, Proc, ProcRow, Sample};
 use rtop::sort::SortKey;
+use rtop::ui::Selection;
 use rtop::ui::Shared;
 use rtop::ui::meters::{Meters, MetersProps};
 use rtop::ui::palette::Palette;
-use rtop::ui::selection::Selection;
 use rtop::ui::table::{ProcessTable, ProcessTableProps};
 
 fn rows(n: usize) -> Vec<ProcRow> {
@@ -209,6 +209,7 @@ fn rendered_meter_rows(cores: usize, width: u16) -> u16 {
         sample: Shared::new(sample),
         palette: Palette::default(),
         width,
+        max_rows: 0,
     });
 
     let ntui::Node::View { children, .. } = el.node else {
@@ -237,7 +238,7 @@ fn the_reported_header_height_matches_what_is_rendered() {
     for cores in [1usize, 2, 4, 8, 16, 32, 64] {
         for width in [40u16, 60, 80, 120, 200] {
             assert_eq!(
-                rtop::ui::meters::height(cores, width),
+                rtop::ui::meters::height(cores, width, 0),
                 rendered_meter_rows(cores, width),
                 "cores={cores} width={width}"
             );
@@ -253,7 +254,7 @@ fn the_header_never_grows_past_its_row_budget() {
     // bar. Dropping meters past the cap is the better failure.
     for cores in [1usize, 8, 32, 64, 256] {
         for width in [20u16, 40, 80, 200] {
-            let height = rtop::ui::meters::height(cores, width);
+            let height = rtop::ui::meters::height(cores, width, 0);
             assert!(
                 height <= rtop::ui::meters::MAX_ROWS as u16 + 1,
                 "cores={cores} width={width} wanted {height} rows"
@@ -264,7 +265,7 @@ fn the_header_never_grows_past_its_row_budget() {
 
 #[test]
 fn a_terminal_too_narrow_for_one_meter_column_still_reports_a_sane_height() {
-    let height = rtop::ui::meters::height(32, 1);
+    let height = rtop::ui::meters::height(32, 1, 0);
 
     assert!(height >= 2, "at least one meter and the summary");
     assert!(height <= rtop::ui::meters::MAX_ROWS as u16 + 1);
@@ -391,4 +392,26 @@ fn an_unreadable_counter_file_reads_as_unavailable_not_as_idle() {
     let text = t.frame_text();
     assert!(text.contains("unavailable"), "disks should say so:\n{text}");
     assert!(text.contains("idle"), "nets genuinely are idle:\n{text}");
+}
+
+#[test]
+fn exactly_one_header_is_marked_for_each_sort_column() {
+    // The marker's job is to name the column driving the order. Two columns
+    // claiming the same key leaves it naming neither.
+    for key in [
+        SortKey::Pid,
+        SortKey::Name,
+        SortKey::Cpu,
+        SortKey::Memory,
+        SortKey::Time,
+    ] {
+        let marked = rtop::ui::table::COLUMNS
+            .iter()
+            .filter(|c| c.sort == Some(key))
+            .count()
+            // The command column is laid out separately, but it is marked
+            // the same way and counts the same.
+            + usize::from(rtop::ui::table::COMMAND_SORT == Some(key));
+        assert_eq!(marked, 1, "{key:?} is claimed by {marked} columns");
+    }
 }

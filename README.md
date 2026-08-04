@@ -29,14 +29,14 @@ are built.
 | `g` / `G`, `Home` / `End` | First / last row |
 | `C-d` / `C-u` | Half page down / up |
 | `PgDn` / `PgUp` | Full page down / up |
-| `Tab`, `1`–`3` | Switch tab |
+| `Tab` / `⇧Tab`, `1`–`3` | Switch tab |
 | `<` / `>` | Previous / next sort column |
 | `I` | Reverse the sort direction |
 | `t` | Tree view |
 | `H` | Hide kernel threads |
 | `u` | Filter to the selected process's user |
 | `Enter` | Process details |
-| `dd` | Kill — asks which signal |
+| `dd` | Kill — asks which signal (two keystrokes, then a confirmation) |
 | `n` | Renice |
 | `/` | Incremental search |
 | `:` | Command line |
@@ -107,8 +107,13 @@ Sampling runs on `spawn_blocking`, never on the render thread. Measured on
 The largest single cost used to be reading `/proc/<pid>/status` for every
 process just to recover its owner — one of the more expensive files in
 procfs, since it makes the kernel walk memory accounting `stat` does not
-touch. The owner is the `/proc/<pid>` directory's own uid, so one `stat(2)`
-answers it, and dropping ~800 file reads per tick roughly halved the sample.
+touch. The `/proc/<pid>` directory's own uid answers it in one `stat(2)`,
+and dropping ~800 file reads per tick roughly halved the sample.
+
+That uid is the process's **effective** one, not its real one — the kernel
+builds the inode's ownership from `cred->euid`. The two differ only for a
+process running through a setuid binary, which rtop attributes to its target
+user. htop shows the same thing.
 
 Sensors are the exception and are handled specially. This machine exposes
 82 `hwmon` inputs and reading them costs ~30 ms — several times the whole

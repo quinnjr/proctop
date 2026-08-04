@@ -107,11 +107,12 @@ impl Component for App {
         let state = ui.get();
         let palette = props.palette;
 
-        // Clamped so the tab bar and status bar are never pushed off the
-        // bottom: on a very short terminal the header gives up rows rather
-        // than the chrome that tells the user where they are.
-        let header_rows = meters::height(current.cores.len(), terminal_cols)
-            .min(terminal_rows.saturating_sub(CHROME_ROWS + 1));
+        // The budget is passed to `Meters`, not just subtracted here: a
+        // clamp the component never sees shrinks the arithmetic without
+        // shrinking the header, which leaves `body_rows` over-stated and
+        // the chrome squeezed off the bottom anyway.
+        let header_budget = terminal_rows.saturating_sub(CHROME_ROWS + 1);
+        let header_rows = meters::height(current.cores.len(), terminal_cols, header_budget);
         let body_rows = terminal_rows
             .saturating_sub(header_rows)
             .saturating_sub(CHROME_ROWS);
@@ -187,28 +188,40 @@ impl Component for App {
             });
         }
 
-        let body = match state.tab {
-            Tab::Processes => element!(ProcessTable(
-                rows: rows.clone(),
-                selection: cursor,
-                height: table_rows,
-                sort: state.sort,
-                palette: palette,
-            )),
-            Tab::Io => element!(IoView(
-                sample: current.clone(),
-                palette: palette,
-                height: body_rows,
-            )),
-            Tab::Sensors => element!(SensorView(
-                sample: current.clone(),
-                palette: palette,
-                height: body_rows,
-            )),
+        // With no rows to give it, the body is omitted rather than rendered
+        // empty: every view still draws its own column header, which would
+        // cost a row the terminal does not have and push the status bar off.
+        let body = if body_rows == 0 {
+            Element::fragment(Vec::new())
+        } else {
+            match state.tab {
+                Tab::Processes => element!(ProcessTable(
+                    rows: rows.clone(),
+                    selection: cursor,
+                    height: table_rows,
+                    sort: state.sort,
+                    palette: palette,
+                )),
+                Tab::Io => element!(IoView(
+                    sample: current.clone(),
+                    palette: palette,
+                    height: body_rows,
+                )),
+                Tab::Sensors => element!(SensorView(
+                    sample: current.clone(),
+                    palette: palette,
+                    height: body_rows,
+                )),
+            }
         };
 
         let mut children = vec![
-            element!(Meters(sample: current.clone(), palette: palette, width: terminal_cols)),
+            element!(Meters(
+                sample: current.clone(),
+                palette: palette,
+                width: terminal_cols,
+                max_rows: header_budget,
+            )),
             tab_bar(&state, &palette),
             body,
             status_bar(&state, rows.len(), &palette),

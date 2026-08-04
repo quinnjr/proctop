@@ -605,3 +605,54 @@ fn the_help_overlay_lists_only_keys_the_keymap_answers_to() {
         }
     }
 }
+
+#[test]
+fn a_modified_d_does_not_complete_the_kill_sequence() {
+    // Ctrl-D's KeyCode is Char('d') too. Comparing only the code let the
+    // documented half-page-down key finish `dd` and open a destructive
+    // dialog — the exact footgun the two-key sequence exists to prevent.
+    let mut state = UiState::default();
+
+    press(&mut state, KeyCode::Char('d'));
+    press_ctrl(&mut state, KeyCode::Char('d'));
+
+    assert_eq!(
+        state.overlay,
+        Overlay::None,
+        "Ctrl-D must not open the dialog"
+    );
+    assert_eq!(
+        state.selection.index,
+        HEIGHT / 2,
+        "and must still scroll half a page"
+    );
+}
+
+#[test]
+fn a_modified_d_does_not_arm_the_kill_sequence_either() {
+    let mut state = UiState::default();
+
+    press_ctrl(&mut state, KeyCode::Char('d'));
+    press(&mut state, KeyCode::Char('d'));
+
+    assert_eq!(
+        state.overlay,
+        Overlay::None,
+        "the first d was Ctrl-D, so this is a fresh prefix"
+    );
+}
+
+#[test]
+fn every_help_key_fits_the_column_it_is_rendered_in() {
+    // The key column is fixed-width and truncating, so an entry longer than
+    // it is silently cut on screen — documentation that reads as complete
+    // in the source and is not.
+    for (keys, description) in rtop::ui::help::BINDINGS {
+        assert!(
+            keys.chars().count() <= rtop::ui::overlay::LABEL_WIDTH as usize,
+            "{keys:?} ({description}) is {} chars, column is {}",
+            keys.chars().count(),
+            rtop::ui::overlay::LABEL_WIDTH
+        );
+    }
+}

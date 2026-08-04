@@ -142,10 +142,29 @@ fn verify_unchanged(pid: i32, starttime: u64) -> io::Result<()> {
         )
     };
 
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|_| exited())?;
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(exited()),
+        // Anything else — EACCES under a `hidepid` mount, EMFILE, ENOMEM —
+        // means the process may well be alive and we simply cannot tell.
+        // Reporting it as exited would be a confident statement of
+        // something we do not know.
+        Err(e) => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!("cannot verify process {pid}: {e}"),
+            ));
+        }
+    };
+
     // The page size is irrelevant here: only `starttime` is read, and it is
     // not scaled by it.
-    let proc = crate::sample::process::parse_pid_stat(&stat, 1).ok_or_else(exited)?;
+    let Some(proc) = crate::sample::process::parse_pid_stat(&stat, 1) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("could not identify process {pid}"),
+        ));
+    };
 
     if proc.starttime != starttime {
         return Err(exited());

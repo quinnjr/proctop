@@ -75,20 +75,6 @@ fn num<T: std::str::FromStr + Default>(rest: &[&str], index: usize) -> T {
     rest[index].parse().unwrap_or_default()
 }
 
-/// Extract the real uid from the contents of `/proc/[pid]/status`.
-///
-/// The `Uid:` line carries four values — real, effective, saved, and
-/// filesystem. The real uid is the one htop's USER column shows; the
-/// effective uid changes under setuid and would make the column flicker.
-pub fn parse_status_uid(text: &str) -> Option<u32> {
-    text.lines()
-        .find_map(|line| line.strip_prefix("Uid:"))?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
-}
-
 fn parse_state(field: &str) -> ProcState {
     match field.chars().next() {
         Some('R') => ProcState::Running,

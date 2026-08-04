@@ -10,7 +10,9 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use crate::delta::{cpu_usage, io_rates, process_cpu, should_refresh, total_jiffies};
-use crate::model::{CpuStat, DiskStat, NetStat, ProcKey, ProcRow, ProcState, Sample, Sensor};
+use crate::model::{
+    CpuStat, DiskStat, IoRate, NetStat, ProcKey, ProcRow, ProcState, Sample, Sensor,
+};
 use crate::sample::{cpu, disk, memory, net, process, sensors, system, users};
 use ntui::Shared;
 
@@ -23,16 +25,18 @@ pub struct Sampler {
     prev_cpu: Option<CpuStat>,
     /// Cumulative CPU time per process as of the previous sample.
     prev_times: HashMap<ProcKey, u64>,
-    prev_disks: Vec<DiskStat>,
-    prev_nets: Vec<NetStat>,
+    /// Previous counters per stream, each with the instant it was read.
+    ///
+    /// Per-stream rather than one shared timestamp: a stream whose file
+    /// could not be read must not advance its own clock, or the next
+    /// successful tick divides two intervals of counters by one interval
+    /// and reports roughly double the true throughput.
+    prev_disks: Option<(Vec<DiskStat>, Instant)>,
+    prev_nets: Option<(Vec<NetStat>, Instant)>,
     /// Last hardware readings, kept so switching to the sensors tab shows
     /// something immediately rather than a blank screen.
     sensors: Shared<Vec<Sensor>>,
     sensors_at: Option<Instant>,
-    /// Wall-clock of the previous sample. Disk and network rates are
-    /// per-second, so unlike CPU they need real elapsed time rather than a
-    /// jiffy delta.
-    prev_at: Option<Instant>,
     /// Interned usernames, so a row's user costs a refcount bump rather
     /// than an allocation.
     user_names: HashMap<u32, std::sync::Arc<str>>,
@@ -46,11 +50,10 @@ impl Sampler {
             users: users::parse_passwd(&read("/etc/passwd")),
             prev_cpu: None,
             prev_times: HashMap::new(),
-            prev_disks: Vec::new(),
-            prev_nets: Vec::new(),
+            prev_disks: None,
+            prev_nets: None,
             sensors: Shared::default(),
             sensors_at: None,
-            prev_at: None,
             user_names: HashMap::new(),
             unknown_user: "?".into(),
         }
@@ -62,8 +65,23 @@ impl Sampler {
     /// rather than taking the monitor down. The first sample reports zero
     /// for every rate, because there is no previous reading to diff against
     /// and inventing a figure would be worse than showing none.
+    ///
+    /// Which subsystems report unreadability as such is a deliberate line.
+    /// `disks`, `nets`, and `sensors` are `Option`, because a restricted
+    /// container or a machine with no `hwmon` can legitimately deny them and
+    /// "idle" would be a lie. `mem`, `load`, and `uptime` are not: procfs
+    /// guarantees those files on every Linux, so a failure there is not a
+    /// case worth a second rendering path — it is a broken kernel, and the
+    /// zeros are as good a signal as anything.
     pub fn sample(&mut self, want_sensors: bool) -> Sample {
-        let cpu_stat = cpu::parse_stat(&read("/proc/stat")).unwrap_or_default();
+        // An unreadable `/proc/stat` must not become a baseline: storing a
+        // zeroed reading makes the next tick diff a real counter against
+        // zero, which reports the machine's since-boot average as if it
+        // were this interval, and drops every per-core meter for a frame.
+        let cpu_stat = match cpu::parse_stat(&read("/proc/stat")) {
+            Some(stat) => stat,
+            None => self.prev_cpu.clone().unwrap_or_default(),
+        };
 
         let (aggregate, cores, elapsed) = match &self.prev_cpu {
             Some(prev) => (
@@ -90,7 +108,7 @@ impl Sampler {
         let mut procs = Vec::with_capacity(self.prev_times.len().max(64));
         let mut times = HashMap::new();
         let mut running = 0;
-        let mut threads = 0;
+        let mut threads: i64 = 0;
 
         for pid in pids() {
             let Some(proc) =
@@ -100,19 +118,16 @@ impl Sampler {
                 continue;
             };
 
-            // The owner of `/proc/<pid>` is the process's real uid, so one
-            // `stat(2)` answers what reading `/proc/<pid>/status` would.
-            // That file is ~55 lines and includes the VmPeak/VmHWM group,
-            // which makes the kernel take the process's mmap_lock — the most
-            // expensive read in this loop, for one integer.
-            let uid = uid_of(pid);
+            let uid = euid_of(pid);
             let key = proc.key();
             let cpu_time = proc.cpu_time();
 
             if proc.state == ProcState::Running {
                 running += 1;
             }
-            threads += proc.threads;
+            // Saturating like every other sum on this path: the column is
+            // unvalidated /proc text, and a debug-build overflow is a panic.
+            threads = threads.saturating_add(proc.threads);
             times.insert(key, cpu_time);
 
             let cpu = self
@@ -143,23 +158,11 @@ impl Sampler {
         let disks = read_optional("/proc/diskstats").map(|t| disk::parse_diskstats(&t));
         let nets = read_optional("/proc/net/dev").map(|t| net::parse_netdev(&t));
         let now = Instant::now();
-        let since = self
-            .prev_at
-            .map(|at| now.duration_since(at))
-            .unwrap_or(Duration::ZERO);
-
-        let disk_rates = disks.as_ref().map(|d| io_rates(&self.prev_disks, d, since));
-        let net_rates = nets.as_ref().map(|n| io_rates(&self.prev_nets, n, since));
+        let disk_rates = rates_from(&mut self.prev_disks, disks, now);
+        let net_rates = rates_from(&mut self.prev_nets, nets, now);
 
         self.prev_cpu = Some(cpu_stat);
         self.prev_times = times;
-        if let Some(disks) = disks {
-            self.prev_disks = disks;
-        }
-        if let Some(nets) = nets {
-            self.prev_nets = nets;
-        }
-        self.prev_at = Some(now);
 
         Sample {
             cpu: aggregate,
@@ -202,6 +205,12 @@ impl Sampler {
     /// The username for a uid, falling back to the number itself when this
     /// machine has no passwd entry — common under containers and directory
     /// services, where hiding the row would be worse than showing a number.
+    ///
+    /// `/etc/passwd` is read once at startup and these names live for the
+    /// session, so a user created later shows as a bare number. The cache is
+    /// keyed by uid, not pid, so it is bounded by the distinct uids that own
+    /// a process during the run — single digits normally, and a few thousand
+    /// at worst under systemd `DynamicUser=`.
     fn username(&mut self, uid: Option<u32>) -> std::sync::Arc<str> {
         let Some(uid) = uid else {
             return self.unknown_user.clone();
@@ -284,11 +293,43 @@ fn read_sensors() -> Vec<Sensor> {
     out
 }
 
+/// Turn one stream's new counters into rates, and make them the baseline.
+///
+/// `None` in means the file could not be read: no rates come out and the
+/// baseline is left untouched, so the next successful read measures across
+/// the whole gap rather than attributing it to one interval.
+fn rates_from<T: crate::model::Counters>(
+    previous: &mut Option<(Vec<T>, Instant)>,
+    current: Option<Vec<T>>,
+    now: Instant,
+) -> Option<Vec<IoRate>> {
+    let current = current?;
+    let since = previous
+        .as_ref()
+        .map(|(_, at)| now.duration_since(*at))
+        .unwrap_or(Duration::ZERO);
+
+    let rates = match previous {
+        // No baseline yet: `io_rates` reports zero rather than a lifetime
+        // total, which is what an empty slice gives it.
+        None => io_rates(&[], &current, since),
+        Some((stats, _)) => io_rates(stats, &current, since),
+    };
+
+    *previous = Some((current, now));
+    Some(rates)
+}
+
 /// Read a file, distinguishing "could not read it" from "it was empty".
 fn read_optional(path: &str) -> Option<String> {
-    fs::read(path)
-        .ok()
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    let bytes = fs::read(path).ok()?;
+    // Validated in place on the overwhelmingly common path; the lossy
+    // conversion — which allocates a second buffer and copies — is paid for
+    // only by the rare record that actually needs it.
+    Some(
+        String::from_utf8(bytes)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+    )
 }
 
 /// Read a file, treating any failure as empty content.
@@ -304,13 +345,24 @@ fn read_optional(path: &str) -> Option<String> {
 /// process from every tick rather than the transient exit race this
 /// function is otherwise about.
 fn read(path: &str) -> String {
-    fs::read(path)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default()
+    read_optional(path).unwrap_or_default()
 }
 
-/// The real uid owning `/proc/<pid>`, which is the process's own.
-fn uid_of(pid: i32) -> Option<u32> {
+/// The uid owning `/proc/<pid>`, which is the process's **effective** uid.
+///
+/// Not the real uid: the kernel builds this inode's ownership from
+/// `cred->euid` (`task_dump_owner()`), and kernel threads are forced to
+/// root. For the overwhelming majority of processes the two agree; they
+/// diverge for anything running through a setuid binary, which this
+/// reports as its target user rather than its invoker.
+///
+/// That is what htop shows, and it is worth the difference: reading the
+/// `Uid:` line instead means opening `/proc/<pid>/status` for every
+/// process, and that file is ~55 lines including the VmPeak/VmHWM group,
+/// which makes the kernel take the process's `mmap_lock`. It was the most
+/// expensive read in the sampling loop, for one integer — removing it
+/// roughly halved the cost of a sample.
+fn euid_of(pid: i32) -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
     fs::metadata(format!("/proc/{pid}")).ok().map(|m| m.uid())
 }
@@ -327,4 +379,80 @@ fn pids() -> Vec<i32> {
         .flatten()
         .filter_map(|e| e.file_name().to_str()?.parse().ok())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::DiskStat;
+
+    fn disk(name: &str, sectors: u64) -> DiskStat {
+        DiskStat {
+            name: name.into(),
+            sectors_read: sectors,
+            ..DiskStat::default()
+        }
+    }
+
+    fn rate_of(rates: &Option<Vec<crate::model::IoRate>>, name: &str) -> u64 {
+        rates
+            .as_ref()
+            .expect("rates")
+            .iter()
+            .find(|r| r.name == name)
+            .expect("device")
+            .read_per_sec
+    }
+
+    #[test]
+    fn rates_are_per_second_over_the_interval() {
+        let mut prev = None;
+        let t0 = Instant::now();
+
+        rates_from(&mut prev, Some(vec![disk("sda", 0)]), t0);
+        let rates = rates_from(&mut prev, Some(vec![disk("sda", 2_000)]), t0 + SECOND);
+
+        // 2000 sectors x 512 bytes over one second.
+        assert_eq!(rate_of(&rates, "sda"), 2_000 * 512);
+    }
+
+    #[test]
+    fn a_failed_read_reports_nothing_and_does_not_disturb_the_baseline() {
+        let mut prev = None;
+        let t0 = Instant::now();
+        rates_from(&mut prev, Some(vec![disk("sda", 0)]), t0);
+
+        let during = rates_from(&mut prev, None, t0 + SECOND);
+
+        assert!(during.is_none(), "unreadable is not the same as idle");
+    }
+
+    #[test]
+    fn the_tick_after_a_failed_read_does_not_report_a_spike() {
+        // The regression this pins: the sample clock advanced on the failed
+        // tick while the counter baseline did not, so the next frame divided
+        // two intervals' worth of counters by one interval and reported ~2x
+        // the true throughput.
+        let mut prev = None;
+        let t0 = Instant::now();
+        rates_from(&mut prev, Some(vec![disk("sda", 0)]), t0);
+        rates_from(&mut prev, None, t0 + SECOND);
+
+        let after = rates_from(&mut prev, Some(vec![disk("sda", 2_000)]), t0 + SECOND * 2);
+
+        // Two seconds elapsed since the last successful read, so the rate is
+        // half what a one-second window would have reported.
+        assert_eq!(rate_of(&after, "sda"), 2_000 * 512 / 2);
+    }
+
+    #[test]
+    fn the_first_successful_read_reports_zero_rather_than_a_lifetime_total() {
+        let mut prev = None;
+
+        let first = rates_from(&mut prev, Some(vec![disk("sda", 9_999)]), Instant::now());
+
+        assert_eq!(rate_of(&first, "sda"), 0);
+    }
+
+    const SECOND: Duration = Duration::from_secs(1);
 }

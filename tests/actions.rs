@@ -135,3 +135,17 @@ fn renices_a_process_whose_identity_still_matches() {
 
     assert_eq!(actions::nice_of(me).unwrap(), before + 1);
 }
+
+#[test]
+fn distinguishes_a_process_it_cannot_read_from_one_that_exited() {
+    // pid 1 exists but its stat is readable, so this checks the other side:
+    // an identity mismatch on a live process must say "exited", and that is
+    // the only case allowed to.
+    let me = std::process::id() as i32;
+
+    let err = actions::kill_if_unchanged(me, my_starttime() + 1, Signal::Cont)
+        .expect_err("identity mismatch");
+
+    assert!(err.to_string().contains("exited"), "{err}");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}

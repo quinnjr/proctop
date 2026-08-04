@@ -1,4 +1,10 @@
-use rtop::ui::selection::Selection;
+//! rtop's contract tests for the cursor it upstreamed to ntui.
+//!
+//! The implementation lives in `ntui::ListSelection` now; these stay as the
+//! downstream statement of what rtop needs from it, so a change upstream
+//! that breaks the process table fails here too.
+
+use rtop::ui::Selection;
 
 #[test]
 fn moves_down_within_the_visible_window_without_scrolling() {
@@ -78,7 +84,7 @@ fn survives_a_terminal_too_short_to_show_any_rows() {
 fn jumps_to_the_last_row_with_the_window_at_the_end() {
     let mut s = Selection::default();
 
-    s.to_bottom(100, 10);
+    s.to_end(100, 10);
 
     assert_eq!(s.index, 99);
     assert_eq!(s.offset, 90);
@@ -92,7 +98,7 @@ fn jumps_back_to_the_first_row() {
         offset: 75,
     };
 
-    s.to_top();
+    s.to_start();
 
     assert_eq!(s.index, 0);
     assert_eq!(s.offset, 0);
