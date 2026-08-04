@@ -38,7 +38,7 @@ struct Cli {
     #[arg(short, long, value_name = "PATH")]
     config: Option<String>,
 
-    /// Print the config file path rtop would read, then exit.
+    /// Print the config file path proctop would read, then exit.
     #[arg(long)]
     show_config_path: bool,
 }
@@ -48,7 +48,7 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     if cli.show_config_path {
-        // The path rtop would actually read, which `--config` overrides.
+        // The path proctop would actually read, which `--config` overrides.
         match &cli.config {
             Some(path) => println!("{path}"),
             None => println!("{}", config::default_path().display()),

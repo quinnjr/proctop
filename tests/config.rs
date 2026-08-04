@@ -245,3 +245,68 @@ fn every_config_example_in_the_design_spec_parses() {
         assert!(config.processes.sort_desc);
     }
 }
+
+const CONFIG_DOC: &str = include_str!("../docs/configuration.md");
+
+#[test]
+fn every_config_example_in_the_documentation_parses() {
+    // The reference doc is the one a user copies from, so a stale key in it
+    // is not a harmless illustration: `deny_unknown_fields` makes pasting it
+    // a fatal startup error. Parsed from the file rather than copied here,
+    // because a copy can only ever prove the copy still works.
+    let blocks: Vec<&str> = CONFIG_DOC
+        .split("```toml")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("```").map(|(block, _)| block))
+        .collect();
+
+    assert!(!blocks.is_empty(), "the doc should show a config");
+
+    for block in &blocks {
+        Config::parse(block)
+            .unwrap_or_else(|e| panic!("a documented config must load: {e}\n{block}"));
+    }
+
+    // The worked example claims to set every key at a non-default value, so
+    // check it actually does — a doc that silently drops a key as the struct
+    // grows is the drift this test exists to catch.
+    let complete = blocks
+        .iter()
+        .find(|b| b.contains("[processes]"))
+        .expect("the doc should show a complete example");
+    let config = Config::parse(complete).expect("should load");
+
+    assert_eq!(config.refresh_ms, 2000);
+    assert_eq!(config.theme, "gruvbox");
+    assert!(config.tree_view);
+    assert!(config.hide_kernel_threads);
+    assert_eq!(config.processes.sort_by, SortKey::Memory);
+    assert!(config.processes.sort_desc);
+    assert_ne!(config, Config::default(), "every key should differ");
+}
+
+#[test]
+fn the_documentation_names_every_theme_that_ships() {
+    // The doc lists them by name, and there is no user theme file — so a
+    // theme added without a doc edit is undiscoverable.
+    for (name, _) in proctop::ui::palette::BUNDLED {
+        assert!(
+            CONFIG_DOC.contains(&format!("`{name}`")),
+            "theme {name} is not in docs/configuration.md"
+        );
+    }
+}
+
+#[test]
+fn the_documentation_names_every_sort_spelling() {
+    // Three tables drifted once and `sort_by = "memory"` became a fatal
+    // startup error while `--sort memory` worked.
+    for (_, spellings) in SortKey::SPELLINGS {
+        for spelling in spellings {
+            assert!(
+                CONFIG_DOC.contains(&format!("`{spelling}`")),
+                "sort spelling {spelling} is not in docs/configuration.md"
+            );
+        }
+    }
+}
