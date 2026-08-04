@@ -72,7 +72,13 @@ fn never_prints_more_than_four_characters_of_value() {
         let n = 1u64 << shift;
         for candidate in [n, n.saturating_sub(1), n.saturating_add(1), u64::MAX] {
             let rendered = bytes(candidate);
-            let digits = rendered.chars().filter(char::is_ascii_digit).count();
+            // Characters of value, which is what the doc claims — counting only
+            // digits let `{value:.3}` render "1.000K" (five characters, four
+            // digits) and still pass.
+            let digits = rendered
+                .trim_end_matches(char::is_alphabetic)
+                .chars()
+                .count();
             assert!(
                 digits <= 4,
                 "bytes({candidate}) = {rendered:?} has {digits} digits"

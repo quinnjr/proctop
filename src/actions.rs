@@ -1,4 +1,4 @@
-//! The only operations that change the system.
+//! The operations that change the system, and the rules about who may.
 //!
 //! Everything here is guarded against the PID values that mean something
 //! other than "one process": `kill(0, ..)` signals the caller's entire
@@ -60,10 +60,71 @@ impl Signal {
 pub const NICE_MIN: i32 = -20;
 pub const NICE_MAX: i32 = 19;
 
+/// This process's effective uid.
+///
+/// The permission questions all reduce to comparing this against a target's
+/// owner, so it is read here rather than threaded through the UI.
+pub fn our_euid() -> u32 {
+    // SAFETY: `geteuid` takes no arguments, cannot fail, and returns a
+    // plain integer.
+    unsafe { libc::geteuid() }
+}
+
+/// Restate an action failure in terms of what the user can do about it.
+///
+/// `EPERM` reaches here as "Operation not permitted", which is accurate and
+/// useless: it does not say that root is the remedy. But three structurally
+/// different failures share `ErrorKind::PermissionDenied`, and telling the
+/// same story about all three is worse than telling none:
+///
+/// * `EPERM` from `kill(2)` — the kernel refused a signal that was actually
+///   attempted. Root is the fix.
+/// * `EACCES` from `setpriority(2)` — lowering a nice value, which needs
+///   `CAP_SYS_NICE` **even for a process you own**. Saying "not permitted"
+///   here reads as "that isn't yours", which is false.
+/// * A wrapped error from [`verify_unchanged`] — the identity re-check could
+///   not read `/proc/<pid>/stat`, so **no syscall was attempted at all**.
+///   Its message was written precisely to avoid claiming what we do not
+///   know, and must survive.
+///
+/// The discriminator is `raw_os_error`: the syscall wrappers build their
+/// errors with [`io::Error::last_os_error`], so they carry an errno, while
+/// every error constructed inside this module carries `None`.
+pub fn explain(err: &io::Error) -> String {
+    explain_as(err, our_euid())
+}
+
+/// [`explain`], with the caller's euid passed in so both branches are
+/// reachable from a test that is not running as root.
+pub fn explain_as(err: &io::Error, ours: u32) -> String {
+    let remedy = if ours == 0 {
+        // Already privileged: an LSM denial, a seccomp filter, a missing
+        // capability in a container, or a PID-namespace boundary. Sending
+        // this user to root is a dead end, so keep the OS text they will
+        // need to diagnose it.
+        return format!("not permitted even as root — {err}");
+    } else {
+        "run proctop as root"
+    };
+
+    match err.raw_os_error() {
+        Some(libc::EPERM) => format!("not permitted — {remedy}"),
+        // Lowering a nice value, which ownership does not govern.
+        Some(libc::EACCES) => format!("not permitted — {remedy} to lower a nice value"),
+        // Constructed here, not by a syscall: keep the context verbatim.
+        _ => err.to_string(),
+    }
+}
+
 /// Check that a process exists and that we would be permitted to signal it,
 /// without delivering anything.
 ///
-/// Signal 0 performs exactly those checks and nothing else.
+/// Signal 0 performs exactly those checks and nothing else, which makes this
+/// the *exact* answer to "may I signal this?" — the kernel's own rule, not a
+/// reconstruction of it. A uid comparison cannot be exact: `kill(2)` matches
+/// the sender's real *or* effective uid against the target's real *or*
+/// saved-set uid, `/proc/<pid>` ownership reports only the effective one,
+/// and `CAP_KILL` can be held without being uid 0 at all.
 pub fn signal_exists(pid: i32) -> io::Result<()> {
     checked_pid(pid)?;
     syscall(unsafe { libc::kill(pid, 0) })
@@ -142,8 +203,13 @@ fn verify_unchanged(pid: i32, starttime: u64) -> io::Result<()> {
         )
     };
 
-    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat,
+    // Read bytes and decode lossily rather than `read_to_string`: `comm` is
+    // raw kernel bytes that any process can set to invalid UTF-8 through
+    // `prctl(PR_SET_NAME)`, and rejecting the line for that would make such
+    // a process permanently unsignallable from the dialog. Only `starttime`
+    // is read from it, which is ASCII whatever the name contains.
+    let stat = match std::fs::read(format!("/proc/{pid}/stat")) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(exited()),
         // Anything else — EACCES under a `hidepid` mount, EMFILE, ENOMEM —
         // means the process may well be alive and we simply cannot tell.

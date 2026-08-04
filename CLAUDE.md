@@ -110,6 +110,22 @@ tick is a race — the live tests poll (`tick_until`) rather than assume.
 
 Most of these are here because something already went wrong.
 
+- **Ask the kernel who may signal what; never reconstruct the rule.**
+  `actions::signal_exists` is `kill(pid, 0)`, which performs exactly the
+  existence and permission check. A uid comparison cannot match it: `kill(2)`
+  accepts the sender's real *or* effective uid against the target's real *or*
+  saved-set uid, `/proc/<pid>` ownership exposes only the effective one (the
+  saved-set uid is in `/proc/<pid>/status`, which `sampler::euid_of`
+  documents as too expensive for the sampling path), and `CAP_KILL` can be
+  held without being uid 0. An earlier version compared uids and had to carry
+  the resulting inaccuracy as a documented caveat in three files.
+- **The permission check is a warning, not a gate.** Permissions can change
+  between the check and the signal, so the dialog still offers every signal
+  and the syscall stays the authority.
+- **Ownership does not govern renicing.** Lowering a nice value needs
+  `CAP_SYS_NICE` even for a process you own, and fails with `EACCES` rather
+  than `EPERM`. `actions::explain` separates the two, because "not
+  permitted" on your own process reads as "that isn't yours".
 - **Process identity is `(pid, starttime)`, never a bare pid.** Linux
   recycles PIDs. This applies to deltas *and* to destructive actions:
   `actions::kill_if_unchanged` / `renice_if_unchanged` re-verify before
@@ -171,6 +187,18 @@ Most of these are here because something already went wrong.
   *words*** — not one 128-bit little-endian value. `::1` is stored as
   `00000000000000000000000001000000`; reversing all sixteen bytes gives the
   wrong address.
+
+## Releasing
+
+The crate is published on crates.io as `proctop`, and `src/lib.rs` re-exports
+every module, so the whole library is public API. Under Cargo's 0.x rules the
+**minor** position is the breaking position.
+
+Adding a field to `ProcRow`, `Sample`, or any other `pub` struct with public
+fields breaks every downstream struct literal — `ProcRow` is deliberately not
+`#[non_exhaustive]`, for the reason its doc gives — so it needs a minor bump,
+not a patch. So does moving or removing a `pub` item. `cargo semver-checks`
+in CI would make this mechanical; there is no CI yet.
 
 ## Conventions
 

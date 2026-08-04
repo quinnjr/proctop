@@ -334,6 +334,12 @@ pub struct ListeningSocket {
 
 /// A process plus the figures derived from comparing it against the previous
 /// sample. This is what the table renders.
+///
+/// Deliberately *not* `#[non_exhaustive]`: that forbids struct expressions
+/// entirely for other crates — functional-update syntax included — which
+/// would push this crate's own integration tests through a constructor for
+/// no outside benefit. The cost is that adding a column is a breaking
+/// change; see the release note in CLAUDE.md.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProcRow {
     pub proc: Proc,
@@ -348,6 +354,11 @@ pub struct ProcRow {
     /// and hundreds of processes, so cloning a row costs a refcount bump
     /// instead of a string copy.
     pub user: std::sync::Arc<str>,
+    /// The owner's effective uid, or `None` when `/proc/<pid>` could not be
+    /// stat'd. Kept alongside the resolved name because permission
+    /// questions are about the number, and a name can be a bare uid string
+    /// on a machine with no passwd entry for it.
+    pub uid: Option<u32>,
     /// Nesting depth in the tree view; always 0 in the flat view.
     pub depth: usize,
 }
@@ -397,6 +408,7 @@ impl Default for ProcRow {
             cpu: 0.0,
             mem: 0.0,
             user: Arc::from(""),
+            uid: None,
             depth: 0,
         }
     }

@@ -1,6 +1,8 @@
 //! The reader layer: walks `/proc` and feeds the parsers.
 //!
-//! This is the only module that performs I/O. Every failure here is expected
+//! This is the only module that performs I/O *on the sampling path*.
+//! `actions` reads `/proc/<pid>/stat` to re-verify identity and `config`
+//! reads the config file; neither runs per tick. Every failure here is expected
 //! rather than exceptional — a process that exits between the directory
 //! listing and the read of its `stat` file yields `ENOENT` on every tick of a
 //! busy machine — so errors drop the affected item and never propagate.
@@ -171,6 +173,7 @@ impl Sampler {
 
             procs.push(ProcRow {
                 user: self.username(uid),
+                uid,
                 proc,
                 cpu,
                 mem: mem_fraction,
@@ -475,7 +478,11 @@ fn read(path: &str) -> String {
     read_optional(path).unwrap_or_default()
 }
 
-/// Map socket inode to the process holding it.
+/// Map socket inode to *a* process holding it.
+///
+/// A listening socket can be held by several processes; this reports the
+/// lowest pid among them, deterministically. `ss -p` lists them all, which
+/// a single column cannot.
 ///
 /// There is no index for this: the only route is to walk every readable
 /// `/proc/<pid>/fd` and readlink each entry, matching `socket:[<inode>]`.
@@ -512,22 +519,15 @@ fn socket_owners(wanted: &HashSet<u64>) -> HashMap<u64, (i32, std::sync::Arc<str
             // The command is read only once a wanted socket is found, so a
             // process holding none costs no extra read.
             let name = name.get_or_insert_with(|| read(&format!("/proc/{pid}/comm")).trim().into());
-            owners.insert(inode, (pid, name.clone()));
+            // First writer wins over a sorted pid list, so a socket held by
+            // several processes — an `SO_REUSEPORT` set, or a pre-fork
+            // server whose children inherited the listening fd — always
+            // reports the same one instead of flickering between ticks.
+            owners.entry(inode).or_insert_with(|| (pid, name.clone()));
         }
     }
 
     owners
-}
-
-/// This process's effective uid, read once.
-///
-/// The Network tab uses it to tell "another user owns this, become root"
-/// apart from "the owner exited between the two reads" — the second is
-/// routine and no privilege fixes it.
-pub fn our_euid() -> u32 {
-    // SAFETY: `geteuid` takes no arguments, cannot fail, and returns a
-    // plain integer.
-    unsafe { libc::geteuid() }
 }
 
 /// The uid owning `/proc/<pid>`, which is the process's **effective** uid.
@@ -557,10 +557,14 @@ fn pids() -> Vec<i32> {
     let Ok(entries) = fs::read_dir("/proc") else {
         return Vec::new();
     };
-    entries
+    let mut pids: Vec<i32> = entries
         .flatten()
         .filter_map(|e| e.file_name().to_str()?.parse().ok())
-        .collect()
+        .collect();
+    // `read_dir` order is whatever the filesystem gives, so sorting is what
+    // makes `socket_owners`' first-writer-wins deterministic across ticks.
+    pids.sort_unstable();
+    pids
 }
 
 #[cfg(test)]

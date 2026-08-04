@@ -27,7 +27,9 @@ mod field {
 fn parse_line(line: &str) -> Option<NetStat> {
     let (name, counters) = line.split_once(':')?;
     let name = name.trim();
-    // The second header line contains a colon too ("face |bytes ...").
+    // Not the header lines — `split_once(':')` already rejected both. This
+    // catches a torn read: a record whose name field is empty or carries
+    // embedded whitespace is not an interface we can name.
     if name.is_empty() || name.contains(char::is_whitespace) {
         return None;
     }

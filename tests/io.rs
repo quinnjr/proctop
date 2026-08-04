@@ -15,6 +15,8 @@ fn find<'a>(rates: &'a [IoRate], name: &str) -> &'a IoRate {
 
 #[test]
 fn reads_per_device_sector_counters() {
+    // The operation counts are asserted too: nothing else reads them, so a
+    // transposed READS/WRITES offset would be a silent mutation.
     // 259 0 nvme1n1 228929 272244 28176355 58872 369982 27282 25024710 ...
     //                  reads      merged  sectors_read      writes  merged  sectors_written
     let disks = disk::parse_diskstats(DISKSTATS);
@@ -25,6 +27,8 @@ fn reads_per_device_sector_counters() {
 
     assert_eq!(nvme.sectors_read, 28_176_355);
     assert_eq!(nvme.sectors_written, 25_024_710);
+    assert_eq!(nvme.reads, 228_929);
+    assert_eq!(nvme.writes, 369_982);
 }
 
 #[test]
@@ -59,6 +63,10 @@ fn reads_per_interface_byte_counters() {
 
     assert_eq!(lo.rx_bytes, 113_396_770);
     assert_eq!(lo.tx_bytes, 113_396_770);
+    // Packet counts too — nothing else reads them, so a transposed offset
+    // would never be noticed.
+    assert_eq!(lo.rx_packets, 221_765);
+    assert_eq!(lo.tx_packets, 221_765);
 }
 
 #[test]

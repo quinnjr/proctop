@@ -172,7 +172,7 @@ impl Component for App {
         {
             let (ui, rows) = (ui.clone(), rows.clone());
             let proc_height = table_rows as usize;
-            let listening_for_keys: Vec<_> = listening.to_vec();
+            let socket_count = listening.len();
             hooks.use_input(move |ev, _| {
                 let mut next = ui.get();
                 next.selection = cursor;
@@ -180,8 +180,7 @@ impl Component for App {
                 let effect = handle_key(
                     &mut next,
                     ev,
-                    Lists::processes(&rows, proc_height)
-                        .with_sockets(&listening_for_keys, socket_height),
+                    Lists::processes(&rows, proc_height).with_sockets(socket_count, socket_height),
                 );
 
                 match effect {
@@ -197,11 +196,11 @@ impl Component for App {
                         starttime,
                         signal,
                     } => {
-                        next.notice =
-                            Some(match actions::kill_if_unchanged(pid, starttime, signal) {
-                                Ok(()) => format!("sent {} to {pid}", signal.label()),
-                                Err(e) => format!("{} to {pid}: {e}", signal.label()),
-                            });
+                        next.notice = Some(action_status(
+                            signal.label(),
+                            pid,
+                            &actions::kill_if_unchanged(pid, starttime, signal),
+                        ));
                     }
                     Effect::Renice {
                         pid,
@@ -211,7 +210,7 @@ impl Component for App {
                         next.notice =
                             Some(match actions::renice_if_unchanged(pid, starttime, nice) {
                                 Ok(()) => format!("reniced {pid} to {nice}"),
-                                Err(e) => format!("renice {pid}: {e}"),
+                                Err(e) => format!("renice {pid}: {}", actions::explain(&e)),
                             });
                     }
                 }
@@ -304,13 +303,17 @@ fn overlay_element(state: &UiState, procs: &[ProcRow], palette: &Palette) -> Opt
             pid: key.pid,
             palette: *palette,
         ))),
-        Overlay::Kill { key, name, index } => Some(element!(Kill(
-            pid: key.pid,
-            name: name.clone(),
-            index: *index,
-            alive: find(procs, *key).is_some(),
-            palette: *palette,
-        ))),
+        Overlay::Kill { key, name, index } => {
+            let row = find(procs, *key);
+            Some(element!(Kill(
+                pid: key.pid,
+                name: name.clone(),
+                index: *index,
+                alive: row.is_some(),
+                owner: row.as_ref().and_then(foreign_owner),
+                palette: *palette,
+            )))
+        }
         Overlay::Renice { key, name, input } => Some(element!(Renice(
             pid: key.pid,
             name: name.clone(),
@@ -322,8 +325,37 @@ fn overlay_element(state: &UiState, procs: &[ProcRow], palette: &Palette) -> Opt
 }
 
 /// The row for a process identity, if it is still in the sample.
+/// The status-bar line for a completed action.
+///
+/// Extracted from the effect handler so the failure wording is reachable
+/// from a test: the handler itself needs a live process and a real syscall.
+pub fn action_status(label: &str, pid: i32, result: &std::io::Result<()>) -> String {
+    match result {
+        Ok(()) => format!("sent {label} to {pid}"),
+        Err(e) => format!("{label} to {pid}: {}", actions::explain(e)),
+    }
+}
+
 fn find(procs: &[ProcRow], key: crate::model::ProcKey) -> Option<ProcRow> {
     procs.iter().find(|r| r.proc.key() == key).cloned()
+}
+
+/// The owner to warn about, or `None` when no warning is warranted.
+///
+/// Asks the kernel with `kill(pid, 0)` rather than comparing uids, so the
+/// answer is the same one the real signal will get. A uid comparison is
+/// necessarily approximate — `kill(2)` also accepts the target's saved-set
+/// uid, `/proc` exposes only the effective one, and `CAP_KILL` need not come
+/// with uid 0 — and an approximation here means warning about processes the
+/// user can in fact signal.
+///
+/// Anything other than a permission refusal means no warning: the process
+/// exiting is already reported by the dialog's own `alive` line.
+pub fn foreign_owner(row: &ProcRow) -> Option<String> {
+    match actions::signal_exists(row.proc.pid) {
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Some(row.user.to_string()),
+        _ => None,
+    }
 }
 
 fn tab_bar(state: &UiState, palette: &Palette) -> Element {

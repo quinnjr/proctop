@@ -22,6 +22,9 @@ fn has_no_name_for_an_unknown_uid() {
 
 #[test]
 fn skips_comments_and_malformed_entries() {
+    // The fixture's comment is a commented-out *entry* — a well-formed
+    // record behind a `#`. Without the guard it parses as a user named
+    // "#joseph" and, the map being last-wins, displaces the real one.
     let table = users::parse_passwd(PASSWD);
 
     assert_eq!(table.name(0), Some("root"), "valid entries still resolve");

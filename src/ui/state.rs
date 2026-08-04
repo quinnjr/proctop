@@ -9,7 +9,7 @@ use ntui::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::actions::{NICE_MAX, NICE_MIN, SIGNALS, Signal};
 use crate::filter::Filter;
-use crate::model::{ListeningSocket, ProcKey, ProcRow};
+use crate::model::{ProcKey, ProcRow};
 use crate::sort::SortKey;
 use crate::ui::Selection;
 
@@ -197,8 +197,13 @@ pub struct Lists<'a> {
     pub procs: &'a [ProcRow],
     /// How many process rows fit on screen.
     pub proc_height: usize,
-    /// Listening sockets shown on the Network tab.
-    pub sockets: &'a [ListeningSocket],
+    /// How many listening sockets the Network tab is showing.
+    ///
+    /// A count rather than the slice: the only thing the keymap ever asks
+    /// is how far the cursor may travel, and holding a borrow of the list
+    /// forced `App` to clone every socket into the input closure once a
+    /// frame.
+    pub sockets: usize,
     /// How many socket rows fit on screen.
     pub socket_height: usize,
 }
@@ -213,8 +218,8 @@ impl<'a> Lists<'a> {
         }
     }
 
-    /// Add the Network tab's listening list.
-    pub fn with_sockets(self, sockets: &'a [ListeningSocket], height: usize) -> Self {
+    /// Add the extent of the Network tab's listening list.
+    pub fn with_sockets(self, sockets: usize, height: usize) -> Self {
         Lists {
             sockets,
             socket_height: height,
@@ -228,7 +233,7 @@ impl Lists<'_> {
     fn extent(&self, tab: Tab) -> (usize, usize) {
         match tab.driven() {
             Driven::Processes => (self.procs.len(), self.proc_height),
-            Driven::Sockets => (self.sockets.len(), self.socket_height),
+            Driven::Sockets => (self.sockets, self.socket_height),
             Driven::Nothing => (0, 0),
         }
     }

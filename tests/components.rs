@@ -21,7 +21,8 @@ fn rows(n: usize) -> Vec<ProcRow> {
             cpu: 0.0,
             mem: 0.01,
             user: "joseph".into(),
-            depth: 0,
+            uid: Some(1000),
+            ..ProcRow::default()
         })
         .collect()
 }
@@ -158,9 +159,29 @@ fn renders_a_meter_for_every_core() {
     .expect("should render");
     let text = t.frame_text();
 
-    for core in 0..4 {
-        assert!(text.contains(&format!("{core}")), "missing core {core}");
-    }
+    // Counted structurally, not by searching the frame for "0".."3": the
+    // summary line alone contains every one of those digits, so the old
+    // form passed with every core meter deleted.
+    let built = render_once::<Meters>(&MetersProps {
+        sample: Shared::new(sample()),
+        palette: Palette::default(),
+        width: 100,
+        max_rows: None,
+    });
+    let ntui::Node::View { children, .. } = built.node else {
+        panic!("expected a view")
+    };
+    let ntui::Node::View { children: cols, .. } = &children[0].node else {
+        panic!("expected the meter row")
+    };
+    let meters: usize = cols
+        .iter()
+        .map(|c| match &c.node {
+            ntui::Node::View { children, .. } => children.len(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(meters, 4 + 2, "four cores plus Mem and Swp");
     assert!(text.contains("Mem"), "missing the memory meter:\n{text}");
     assert!(text.contains("Swp"), "missing the swap meter:\n{text}");
 }
@@ -619,4 +640,134 @@ fn the_attribution_footer_appears_only_when_a_row_is_unattributed() {
 
     let two_unknown = render(vec![socket(80, false), socket(443, false)]);
     assert!(two_unknown.contains("2 sockets "), "plural:\n{two_unknown}");
+}
+
+// ---------- signalling another user's process ----------
+
+use proctop::ui::detail::{Kill, KillProps};
+
+fn kill_dialog(owner: Option<&str>) -> String {
+    TestTerminal::new(
+        70,
+        18,
+        element!(Kill(
+            pid: 1i32,
+            name: "systemd".to_string(),
+            index: 0usize,
+            alive: true,
+            owner: owner.map(|o| o.to_string()),
+            palette: Palette::default(),
+        )),
+    )
+    .expect("should render")
+    .frame_text()
+}
+
+#[test]
+fn the_kill_dialog_names_the_owner_and_the_remedy() {
+    // The owner is deliberately not "root": the remedy clause contains the
+    // word "root" regardless, so a fixture owned by root lets an assertion
+    // for "root" pass without the name ever being rendered.
+    let text = kill_dialog(Some("postgres"));
+
+    assert!(
+        text.contains("owned by postgres"),
+        "should name the owner:\n{text}"
+    );
+    assert!(
+        text.contains("Needs root"),
+        "should say what would fix it:\n{text}"
+    );
+}
+
+#[test]
+fn a_long_owner_name_does_not_push_the_remedy_off_the_panel() {
+    // The row truncates silently at PANEL_WIDTH, so the variable-length
+    // part has to be the part that gets cut. `systemd-timesync` and friends
+    // own exactly the processes a user cannot signal.
+    for owner in [
+        "systemd-timesync",
+        "systemd-resolve",
+        "nvidia-persistenced",
+        "a-very-long-service-account-name-well-past-the-panel",
+    ] {
+        let text = kill_dialog(Some(owner));
+        let line = text
+            .lines()
+            .find(|l| l.contains("Needs root"))
+            .unwrap_or_else(|| panic!("the remedy vanished for {owner}:\n{text}"));
+
+        assert!(
+            line.trim_end().ends_with('│'),
+            "the row overflowed its panel for {owner}:\n{line}"
+        );
+    }
+}
+
+#[test]
+fn the_warning_does_not_remove_the_signals() {
+    // The check is a separate `kill(pid, 0)` and permissions can change
+    // between it and the real signal, so refusing to offer the signal would
+    // block kills that would in fact succeed.
+    let text = kill_dialog(Some("postgres"));
+
+    for signal in ["SIGTERM", "SIGKILL"] {
+        assert!(
+            text.contains(signal),
+            "{signal} should still be offered:\n{text}"
+        );
+    }
+    assert!(text.contains("Enter send"), "still sendable:\n{text}");
+}
+
+#[test]
+fn no_warning_for_a_process_we_own() {
+    let text = kill_dialog(None);
+
+    assert!(!text.contains("Needs root"), "no warning expected:\n{text}");
+    assert!(text.contains("SIGTERM"));
+}
+
+// ---------- the table's reason for existing ----------
+
+#[test]
+fn numeric_columns_truncate_from_the_left_and_text_from_the_right() {
+    use proctop::ui::table::pad;
+
+    // This asymmetry is the whole reason proctop keeps its own table rather
+    // than using `ntui::widgets::Table`, and nothing asserted it.
+    assert_eq!(
+        pad("123456789", 7, true),
+        "3456789",
+        "keep the low-order digits"
+    );
+    assert_eq!(
+        pad("chrome-renderer", 9, false),
+        "chrome-re",
+        "keep the start"
+    );
+
+    // Short values pad to the column, right-aligned when numeric.
+    assert_eq!(pad("42", 5, true), "   42");
+    assert_eq!(pad("bash", 6, false), "bash  ");
+}
+
+#[test]
+fn tree_depth_prefixes_a_guide() {
+    // Every fixture row in this file is depth 0, so the guide branch was
+    // never executed by any test.
+    let mut nested = rows(2);
+    nested[1].depth = 2;
+
+    let t = table(nested, Selection::default(), 5);
+    let text = t.frame_text();
+
+    assert!(
+        text.contains("└─ proc-001"),
+        "a nested row should carry a guide:\n{text}"
+    );
+    assert!(
+        !text.contains("└─ proc-000"),
+        "a root row should not:\n{text}"
+    );
 }

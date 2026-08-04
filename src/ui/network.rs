@@ -149,7 +149,7 @@ fn listening(props: &NetworkViewProps, available: usize) -> Vec<Element> {
 
     if unattributed > 0 {
         rows.push(placeholder(
-            &attribution_note(unattributed, sockets, crate::sampler::our_euid()),
+            &attribution_note(unattributed, sockets, crate::actions::our_euid()),
             palette.muted,
         ));
     }
@@ -430,6 +430,68 @@ mod tests {
         let mine = [owned_by(1000, false)];
         assert!(attribution_note(1, &mine, 1000).contains("1 socket "));
         assert!(attribution_note(2, &mine, 1000).contains("2 sockets "));
+    }
+
+    /// How many socket rows `listening` actually emits at `height`.
+    fn drawn_socket_rows(height: usize, sockets: Vec<ListeningSocket>) -> usize {
+        let sample = Sample {
+            nets: Some(Vec::new()),
+            sockets: Some(ntui::Shared::new(sockets)),
+            ..Sample::default()
+        };
+        let props = NetworkViewProps {
+            sample: Shared::new(sample),
+            palette: Palette::default(),
+            height: height as u16,
+            selection: Selection::default(),
+        };
+        let empty = props
+            .sample
+            .sockets
+            .as_deref()
+            .is_some_and(|s| s.is_empty());
+        if empty {
+            // The "nothing is listening" line is a placeholder, not a row
+            // the cursor can land on.
+            return 0;
+        }
+        let (_, listening_rows) = layout(height, &props.sample);
+        let total = listening(&props, listening_rows).len();
+        let footer = usize::from(
+            props
+                .sample
+                .sockets
+                .as_deref()
+                .is_some_and(|s| s.iter().any(|x| x.process.is_none())),
+        );
+        total.saturating_sub(CHROME + footer)
+    }
+
+    #[test]
+    fn the_clamp_and_the_renderer_agree_at_every_height() {
+        // `App` clamps the socket cursor with `socket_capacity` and the
+        // renderer windows with it. Disagree and the cursor scrolls rows off
+        // with no key to recover them — the bug this pairing exists to stop,
+        // and until now nothing pinned it.
+        for height in 0..24usize {
+            for count in [0usize, 1, 3, 12, 40] {
+                let sockets: Vec<ListeningSocket> =
+                    (0..count).map(|i| owned_by(1000, i % 3 != 0)).collect();
+                let sample = Sample {
+                    nets: Some(Vec::new()),
+                    sockets: Some(ntui::Shared::new(sockets.clone())),
+                    ..Sample::default()
+                };
+
+                let claimed = socket_capacity(height, &sample).min(count);
+                let drawn = drawn_socket_rows(height, sockets);
+
+                assert_eq!(
+                    claimed, drawn,
+                    "height={height} sockets={count}: clamp says {claimed}, renderer drew {drawn}"
+                );
+            }
+        }
     }
 
     #[test]

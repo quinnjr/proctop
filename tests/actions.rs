@@ -149,3 +149,115 @@ fn distinguishes_a_process_it_cannot_read_from_one_that_exited() {
     assert!(err.to_string().contains("exited"), "{err}");
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
 }
+
+// ---------- who may signal what ----------
+
+#[test]
+fn the_kernel_permits_signalling_our_own_process() {
+    // `signal_exists` is `kill(pid, 0)` — the kernel's own existence and
+    // permission check, and the same rule the real signal will be judged by.
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("should spawn");
+    let pid = child.id() as i32;
+
+    assert!(
+        actions::signal_exists(pid).is_ok(),
+        "we spawned it, so we may signal it"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn the_kernel_refuses_another_users_process() {
+    // pid 1 is root-owned on every Linux. Skipped under root, where the
+    // refusal legitimately does not happen.
+    if actions::our_euid() == 0 {
+        return;
+    }
+
+    let err = actions::signal_exists(1).expect_err("pid 1 is not ours");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+}
+
+#[test]
+fn a_process_that_has_exited_is_not_a_permission_problem() {
+    // The dialog reports an exited process separately, so the two must not
+    // be confused: `ESRCH` is `NotFound`, never `PermissionDenied`.
+    // Asserted on the errno, not the `ErrorKind`: std maps ESRCH to
+    // `Uncategorized`, so only the number is stable to match on.
+    let err = actions::signal_exists(0x3FFF_FFFF).expect_err("no such pid");
+
+    assert_eq!(err.raw_os_error(), Some(libc::ESRCH));
+    assert_ne!(
+        err.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "an absent process must not read as a permission problem"
+    );
+}
+
+#[test]
+fn a_refused_signal_says_what_would_fix_it() {
+    // Built the way the kernel builds it — `Error::from(ErrorKind::_)`
+    // stringifies to "permission denied" and carries no errno, so a test
+    // using it cannot tell "replaced the message" from "appended to it",
+    // and never exercises the shape the real path produces.
+    let refused = std::io::Error::from_raw_os_error(libc::EPERM);
+
+    assert_eq!(
+        actions::explain_as(&refused, 1000),
+        "not permitted — run proctop as root"
+    );
+}
+
+#[test]
+fn lowering_a_nice_value_is_not_reported_as_someone_elses_process() {
+    // `setpriority(2)` refuses this with EACCES even for a process you own,
+    // so a bare "not permitted" reads as "that isn't yours" — which is false
+    // and contradicts the kill dialog, which shows no owner warning for it.
+    let refused = std::io::Error::from_raw_os_error(libc::EACCES);
+
+    let message = actions::explain_as(&refused, 1000);
+
+    assert!(
+        message.contains("nice value"),
+        "should name the real cause: {message}"
+    );
+}
+
+#[test]
+fn root_is_not_told_to_become_root() {
+    // EPERM still reaches a privileged caller — an LSM denial, a seccomp
+    // filter, a container without CAP_KILL. Repeating the remedy they
+    // already have is a dead end, so the OS text has to survive.
+    let refused = std::io::Error::from_raw_os_error(libc::EPERM);
+
+    let message = actions::explain_as(&refused, 0);
+
+    assert!(message.contains("even as root"), "{message}");
+    assert!(
+        message.contains("Operation not permitted"),
+        "the diagnosable text must survive: {message}"
+    );
+}
+
+#[test]
+fn an_unverifiable_identity_is_not_reported_as_a_refused_signal() {
+    // `verify_unchanged` builds this when it cannot read /proc/<pid>/stat —
+    // no syscall was attempted, and its wording exists to avoid claiming
+    // otherwise. Errors constructed here carry no errno, which is what
+    // separates them from a real refusal.
+    let unverifiable = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "cannot verify process 1234: Permission denied (os error 13)",
+    );
+
+    assert_eq!(
+        actions::explain_as(&unverifiable, 1000),
+        "cannot verify process 1234: Permission denied (os error 13)"
+    );
+}
