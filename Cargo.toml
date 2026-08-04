@@ -1,12 +1,12 @@
 [package]
 name = "proctop"
 description = "An htop-inspired Linux system monitor that reads /proc directly, built on ntui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # let-chains in `ui::state` and `filter` are stable from here.
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/quinnjr/rtop"
+repository = "https://github.com/quinnjr/proctop"
 readme = "README.md"
 keywords = ["monitor", "htop", "tui", "procfs", "system"]
 categories = ["command-line-utilities"]
