@@ -125,6 +125,9 @@ Flags (`--refresh`, `--sort`, `--theme`, `--tree`, `-H`, `--config`)
 override the file for one run and are never written back.
 `proctop --show-config-path` prints where it looks.
 
+Every option, every accepted value, and what happens when one is wrong:
+[docs/configuration.md](docs/configuration.md).
+
 ## Cost
 
 Sampling runs on `spawn_blocking`, never on the render thread. Measured on
