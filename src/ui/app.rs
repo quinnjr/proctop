@@ -121,7 +121,7 @@ impl Component for App {
         // clamp the component never sees shrinks the arithmetic without
         // shrinking the header, which leaves `body_rows` over-stated and
         // the chrome squeezed off the bottom anyway.
-        let header_budget = terminal_rows.saturating_sub(CHROME_ROWS + 1);
+        let header_budget = Some(terminal_rows.saturating_sub(CHROME_ROWS + 1));
         let header_rows = meters::height(current.cores.len(), terminal_cols, header_budget);
         let body_rows = terminal_rows
             .saturating_sub(header_rows)

@@ -200,7 +200,7 @@ fn renders_meters_on_a_machine_with_no_swap() {
 
 /// The number of terminal rows `Meters` actually renders: its tallest meter
 /// column, plus the summary line beneath.
-fn rendered_meter_rows(cores: usize, width: u16) -> u16 {
+fn rendered_meter_rows(cores: usize, width: u16, max_rows: Option<u16>) -> u16 {
     let sample = Sample {
         cores: vec![Default::default(); cores],
         ..Sample::default()
@@ -209,11 +209,13 @@ fn rendered_meter_rows(cores: usize, width: u16) -> u16 {
         sample: Shared::new(sample),
         palette: Palette::default(),
         width,
-        max_rows: 0,
+        max_rows,
     });
 
+    // A budget with no room for a meter renders no header at all, which is
+    // a fragment rather than a view.
     let ntui::Node::View { children, .. } = el.node else {
-        panic!("expected a view")
+        return 0;
     };
     // children = [row of meter columns, summary line]
     let ntui::Node::View { children: cols, .. } = &children[0].node else {
@@ -235,15 +237,32 @@ fn the_reported_header_height_matches_what_is_rendered() {
     // `App` subtracts this from the terminal height to size the body. If the
     // two disagree, the tab bar and status bar are pushed off the bottom by
     // exactly the difference.
-    for cores in [1usize, 2, 4, 8, 16, 32, 64] {
+    // Swept across budgets, not just the unbounded one: the two branches
+    // the `Option<u16>` change introduced are both budget-gated, so a
+    // `None`-only sweep leaves `height` and the renderer free to disagree
+    // exactly where they used to.
+    for cores in [0usize, 1, 2, 4, 8, 16, 32, 64] {
         for width in [40u16, 60, 80, 120, 200] {
-            assert_eq!(
-                rtop::ui::meters::height(cores, width, 0),
-                rendered_meter_rows(cores, width),
-                "cores={cores} width={width}"
-            );
+            for budget in [None, Some(0), Some(1), Some(2), Some(3), Some(6), Some(10)] {
+                assert_eq!(
+                    rtop::ui::meters::height(cores, width, budget),
+                    rendered_meter_rows(cores, width, budget),
+                    "cores={cores} width={width} budget={budget:?}"
+                );
+            }
         }
     }
+}
+
+#[test]
+fn a_budget_with_no_room_for_a_meter_renders_no_header_at_all() {
+    // `Some(0)` used to be spelled `0`, which meant "unbounded" — so the
+    // one case with no room was read as the one case with unlimited room.
+    for budget in [Some(0), Some(1)] {
+        assert_eq!(rtop::ui::meters::height(16, 120, budget), 0, "{budget:?}");
+        assert_eq!(rendered_meter_rows(16, 120, budget), 0, "{budget:?}");
+    }
+    assert!(rtop::ui::meters::height(16, 120, Some(4)) > 0);
 }
 
 #[test]
@@ -254,7 +273,7 @@ fn the_header_never_grows_past_its_row_budget() {
     // bar. Dropping meters past the cap is the better failure.
     for cores in [1usize, 8, 32, 64, 256] {
         for width in [20u16, 40, 80, 200] {
-            let height = rtop::ui::meters::height(cores, width, 0);
+            let height = rtop::ui::meters::height(cores, width, None);
             assert!(
                 height <= rtop::ui::meters::MAX_ROWS as u16 + 1,
                 "cores={cores} width={width} wanted {height} rows"
@@ -265,7 +284,7 @@ fn the_header_never_grows_past_its_row_budget() {
 
 #[test]
 fn a_terminal_too_narrow_for_one_meter_column_still_reports_a_sane_height() {
-    let height = rtop::ui::meters::height(32, 1, 0);
+    let height = rtop::ui::meters::height(32, 1, None);
 
     assert!(height >= 2, "at least one meter and the summary");
     assert!(height <= rtop::ui::meters::MAX_ROWS as u16 + 1);

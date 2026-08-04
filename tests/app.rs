@@ -166,6 +166,23 @@ async fn switches_to_the_disk_tab() {
 }
 
 #[tokio::test]
+async fn mounts_on_a_terminal_too_short_for_anything() {
+    // Nothing may panic at any size, on any tab. Ticking until a sample
+    // lands matters: `layout`/`capacity` only see interesting values once
+    // there are cores, disks and sockets to lay out.
+    for (cols, rows) in [(80u16, 0u16), (80, 1), (80, 2), (80, 3), (20, 1)] {
+        let mut t = TestTerminal::new(cols, rows, element!(App)).expect("should mount");
+        for _ in 0..20 {
+            t.tick().await.expect("should tick");
+        }
+        for tab in ['2', '3', '4', '1'] {
+            t.send_key(KeyCode::Char(tab)).expect("should accept input");
+            t.tick().await.expect("should tick");
+        }
+    }
+}
+
+#[tokio::test]
 async fn switches_to_the_network_tab() {
     let mut t = sampled().await;
 
@@ -345,9 +362,23 @@ async fn the_chrome_survives_a_terminal_too_short_for_the_header() {
     // The clamp used to shrink only the number App subtracted, while Meters
     // went on rendering its full height — so the arithmetic stopped
     // describing the screen and the tab bar and status bar were squeezed.
-    for rows in [4u16, 6, 8, 12] {
+    // Starting at 2, not 4: the budget App computes goes to zero at three
+    // rows and shorter, and a zero budget used to mean "unbounded" — so the
+    // shortest terminals were exactly the ones the old loop never tried.
+    // Two rows is the floor at which both bars can exist at all.
+    for rows in [2u16, 3, 4, 5, 6, 8, 12] {
         let mut t = TestTerminal::new(120, rows, element!(App)).expect("should mount");
-        t.tick().await.expect("should tick");
+        // Ticked until a sample lands: one tick leaves `cores` empty, so the
+        // header is two meters rather than the host's core count and the
+        // arithmetic can disagree by at most a row. The structural sweep in
+        // `tests/components.rs` covers the core counts a host cannot supply.
+        for _ in 0..40 {
+            t.tick().await.expect("should tick");
+            if !t.frame_text().contains("Tasks: 0,") {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
 
         let text = t.frame_text();
         assert!(
