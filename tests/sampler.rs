@@ -5,7 +5,7 @@
 
 #![cfg(target_os = "linux")]
 
-use rtop::sampler::{Sampler, Wanted};
+use proctop::sampler::{Sampler, Wanted};
 
 #[test]
 fn samples_the_running_machine() {

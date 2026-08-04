@@ -1,12 +1,12 @@
 use ntui::element;
 use ntui::testing::{TestTerminal, render_once};
-use rtop::model::{MemInfo, Proc, ProcRow, Sample};
-use rtop::sort::SortKey;
-use rtop::ui::Selection;
-use rtop::ui::Shared;
-use rtop::ui::meters::{Meters, MetersProps};
-use rtop::ui::palette::Palette;
-use rtop::ui::table::{ProcessTable, ProcessTableProps};
+use proctop::model::{MemInfo, Proc, ProcRow, Sample};
+use proctop::sort::SortKey;
+use proctop::ui::Selection;
+use proctop::ui::Shared;
+use proctop::ui::meters::{Meters, MetersProps};
+use proctop::ui::palette::Palette;
+use proctop::ui::table::{ProcessTable, ProcessTableProps};
 
 fn rows(n: usize) -> Vec<ProcRow> {
     (0..n)
@@ -245,7 +245,7 @@ fn the_reported_header_height_matches_what_is_rendered() {
         for width in [40u16, 60, 80, 120, 200] {
             for budget in [None, Some(0), Some(1), Some(2), Some(3), Some(6), Some(10)] {
                 assert_eq!(
-                    rtop::ui::meters::height(cores, width, budget),
+                    proctop::ui::meters::height(cores, width, budget),
                     rendered_meter_rows(cores, width, budget),
                     "cores={cores} width={width} budget={budget:?}"
                 );
@@ -259,10 +259,14 @@ fn a_budget_with_no_room_for_a_meter_renders_no_header_at_all() {
     // `Some(0)` used to be spelled `0`, which meant "unbounded" — so the
     // one case with no room was read as the one case with unlimited room.
     for budget in [Some(0), Some(1)] {
-        assert_eq!(rtop::ui::meters::height(16, 120, budget), 0, "{budget:?}");
+        assert_eq!(
+            proctop::ui::meters::height(16, 120, budget),
+            0,
+            "{budget:?}"
+        );
         assert_eq!(rendered_meter_rows(16, 120, budget), 0, "{budget:?}");
     }
-    assert!(rtop::ui::meters::height(16, 120, Some(4)) > 0);
+    assert!(proctop::ui::meters::height(16, 120, Some(4)) > 0);
 }
 
 #[test]
@@ -273,9 +277,9 @@ fn the_header_never_grows_past_its_row_budget() {
     // bar. Dropping meters past the cap is the better failure.
     for cores in [1usize, 8, 32, 64, 256] {
         for width in [20u16, 40, 80, 200] {
-            let height = rtop::ui::meters::height(cores, width, None);
+            let height = proctop::ui::meters::height(cores, width, None);
             assert!(
-                height <= rtop::ui::meters::MAX_ROWS as u16 + 1,
+                height <= proctop::ui::meters::MAX_ROWS as u16 + 1,
                 "cores={cores} width={width} wanted {height} rows"
             );
         }
@@ -284,18 +288,18 @@ fn the_header_never_grows_past_its_row_budget() {
 
 #[test]
 fn a_terminal_too_narrow_for_one_meter_column_still_reports_a_sane_height() {
-    let height = rtop::ui::meters::height(32, 1, None);
+    let height = proctop::ui::meters::height(32, 1, None);
 
     assert!(height >= 2, "at least one meter and the summary");
-    assert!(height <= rtop::ui::meters::MAX_ROWS as u16 + 1);
+    assert!(height <= proctop::ui::meters::MAX_ROWS as u16 + 1);
 }
 
 // ---------- view row budgets ----------
 
 use ntui::Shared as NShared;
-use rtop::model::{IoRate, Sensor, SensorKind};
-use rtop::ui::io::{DiskView, DiskViewProps};
-use rtop::ui::sensors::{SensorView, SensorViewProps};
+use proctop::model::{IoRate, Sensor, SensorKind};
+use proctop::ui::io::{DiskView, DiskViewProps};
+use proctop::ui::sensors::{SensorView, SensorViewProps};
 
 fn count_rows(el: ntui::Element) -> usize {
     match el.node {
@@ -460,21 +464,21 @@ fn exactly_one_header_is_marked_for_each_sort_column() {
         SortKey::Memory,
         SortKey::Time,
     ] {
-        let marked = rtop::ui::table::COLUMNS
+        let marked = proctop::ui::table::COLUMNS
             .iter()
             .filter(|c| c.sort == Some(key))
             .count()
             // The command column is laid out separately, but it is marked
             // the same way and counts the same.
-            + usize::from(rtop::ui::table::COMMAND_SORT == Some(key));
+            + usize::from(proctop::ui::table::COMMAND_SORT == Some(key));
         assert_eq!(marked, 1, "{key:?} is claimed by {marked} columns");
     }
 }
 
 // ---------- network tab ----------
 
-use rtop::model::{ListeningSocket, Protocol, Socket};
-use rtop::ui::network::{NetworkView, NetworkViewProps};
+use proctop::model::{ListeningSocket, Protocol, Socket};
+use proctop::ui::network::{NetworkView, NetworkViewProps};
 
 fn socket(port: u16, attributed: bool) -> ListeningSocket {
     ListeningSocket {

@@ -1,6 +1,6 @@
-use rtop::delta::io_rates;
-use rtop::model::{DiskStat, IoRate, NetStat};
-use rtop::sample::{disk, net};
+use proctop::delta::io_rates;
+use proctop::model::{DiskStat, IoRate, NetStat};
+use proctop::sample::{disk, net};
 
 const DISKSTATS: &str = include_str!("fixtures/diskstats.txt");
 const NETDEV: &str = include_str!("fixtures/netdev.txt");

@@ -1,14 +1,14 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use rtop::model::{Exposure, Protocol};
-use rtop::sample::sockets;
+use proctop::model::{Exposure, Protocol};
+use proctop::sample::sockets;
 
 const TCP: &str = include_str!("fixtures/net_tcp.txt");
 const TCP6: &str = include_str!("fixtures/net_tcp6.txt");
 const UDP: &str = include_str!("fixtures/net_udp.txt");
 const UDP6: &str = include_str!("fixtures/net_udp6.txt");
 
-fn ports(sockets: &[rtop::model::Socket]) -> Vec<u16> {
+fn ports(sockets: &[proctop::model::Socket]) -> Vec<u16> {
     sockets.iter().map(|s| s.local.port()).collect()
 }
 

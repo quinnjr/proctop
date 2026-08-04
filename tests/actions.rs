@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use rtop::actions::{self, Signal};
+use proctop::actions::{self, Signal};
 
 #[test]
 fn names_the_signals_htop_offers() {
@@ -79,7 +79,7 @@ fn reads_back_the_nice_value_it_set() {
 
 // ---------- identity-checked actions ----------
 
-use rtop::sample::process::parse_pid_stat;
+use proctop::sample::process::parse_pid_stat;
 
 /// This process's own start time, as `/proc` reports it.
 fn my_starttime() -> u64 {

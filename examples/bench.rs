@@ -11,7 +11,7 @@
 //! Run with `cargo run --release --example bench` — a debug build measures
 //! the wrong thing by a wide margin.
 
-use rtop::sampler::Wanted;
+use proctop::sampler::Wanted;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -53,7 +53,7 @@ const CASES: [(&str, Wanted); 4] = [
 ];
 
 fn main() {
-    let mut sampler = rtop::sampler::Sampler::new();
+    let mut sampler = proctop::sampler::Sampler::new();
 
     // The first sample has no previous reading to diff against and does not
     // represent steady-state cost.
@@ -74,7 +74,7 @@ fn main() {
         // comparison between them.
         let mut total = Duration::ZERO;
         for _ in 0..ITERATIONS {
-            let mut fresh = rtop::sampler::Sampler::new();
+            let mut fresh = proctop::sampler::Sampler::new();
             let started = Instant::now();
             black_box(fresh.sample(wanted));
             total += started.elapsed();

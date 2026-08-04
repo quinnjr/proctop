@@ -2,10 +2,10 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use ntui::{element, render};
-use rtop::config::{self, Config, MIN_REFRESH_MS};
-use rtop::sort::SortKey;
-use rtop::ui::app::{App, AppProps};
-use rtop::ui::palette::Palette;
+use proctop::config::{self, Config, MIN_REFRESH_MS};
+use proctop::sort::SortKey;
+use proctop::ui::app::{App, AppProps};
+use proctop::ui::palette::Palette;
 
 /// An htop-inspired system monitor.
 ///
@@ -62,7 +62,7 @@ async fn main() -> ExitCode {
     let config = match load_config(&cli) {
         Ok(config) => config,
         Err(message) => {
-            eprintln!("rtop: {message}");
+            eprintln!("proctop: {message}");
             return ExitCode::FAILURE;
         }
     };
@@ -70,7 +70,7 @@ async fn main() -> ExitCode {
     let palette = match Palette::named(&config.theme) {
         Ok(palette) => palette,
         Err(e) => {
-            eprintln!("rtop: {e}");
+            eprintln!("proctop: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -78,7 +78,7 @@ async fn main() -> ExitCode {
     match render(element!(App(config: config, palette: palette))).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("rtop: {e}");
+            eprintln!("proctop: {e}");
             ExitCode::FAILURE
         }
     }

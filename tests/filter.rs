@@ -1,5 +1,5 @@
-use rtop::filter::{Filter, apply};
-use rtop::model::{Proc, ProcRow, ProcState};
+use proctop::filter::{Filter, apply};
+use proctop::model::{Proc, ProcRow, ProcState};
 
 fn row(pid: i32, name: &str, user: &str, state: ProcState) -> ProcRow {
     ProcRow {

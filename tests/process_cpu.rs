@@ -1,4 +1,4 @@
-use rtop::delta::process_cpu;
+use proctop::delta::process_cpu;
 
 #[track_caller]
 fn assert_close(actual: f32, expected: f32) {

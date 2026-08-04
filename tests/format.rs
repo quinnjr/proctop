@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use rtop::format::{bar, bytes, cpu_time, uptime};
+use proctop::format::{bar, bytes, cpu_time, uptime};
 
 #[test]
 fn fills_a_bar_in_proportion_to_the_value() {

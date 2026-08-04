@@ -1,5 +1,5 @@
-use rtop::model::{Proc, ProcRow};
-use rtop::tree::flatten;
+use proctop::model::{Proc, ProcRow};
+use proctop::tree::flatten;
 
 fn row(pid: i32, ppid: i32, name: &str) -> ProcRow {
     ProcRow {

@@ -9,11 +9,11 @@
 
 use ntui::element;
 use ntui::testing::TestTerminal;
-use rtop::model::{ListeningSocket, Protocol, Sample, Socket};
-use rtop::ui::Selection;
-use rtop::ui::Shared;
-use rtop::ui::network::{NetworkView, NetworkViewProps};
-use rtop::ui::palette::Palette;
+use proctop::model::{ListeningSocket, Protocol, Sample, Socket};
+use proctop::ui::Selection;
+use proctop::ui::Shared;
+use proctop::ui::network::{NetworkView, NetworkViewProps};
+use proctop::ui::palette::Palette;
 
 #[test]
 fn a_process_cannot_disguise_its_name_in_the_listening_table() {

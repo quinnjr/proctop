@@ -92,6 +92,6 @@ impl Component for Help {
             })
             .collect();
 
-        overlay::panel("rtop — keys", palette, body)
+        overlay::panel("proctop — keys", palette, body)
     }
 }

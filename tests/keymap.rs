@@ -1,8 +1,8 @@
 use ntui::{KeyCode, KeyEvent, KeyModifiers};
-use rtop::actions::Signal;
-use rtop::model::{ListeningSocket, Proc, ProcRow, Protocol, Socket};
-use rtop::sort::SortKey;
-use rtop::ui::state::{Effect, Lists, Mode, Overlay, Tab, UiState, handle_key};
+use proctop::actions::Signal;
+use proctop::model::{ListeningSocket, Proc, ProcRow, Protocol, Socket};
+use proctop::sort::SortKey;
+use proctop::ui::state::{Effect, Lists, Mode, Overlay, Tab, UiState, handle_key};
 
 const HEIGHT: usize = 10;
 
@@ -606,7 +606,7 @@ fn q_closes_the_renice_dialog_the_way_it_closes_the_kill_dialog() {
 #[test]
 fn the_help_overlay_lists_only_keys_the_keymap_answers_to() {
     // The help text is a claim about behavior; nothing kept it honest.
-    for (keys, description) in rtop::ui::help::BINDINGS {
+    for (keys, description) in proctop::ui::help::BINDINGS {
         // Section headings carry no key, and `:command <arg>` entries are
         // command spellings rather than keys.
         if keys.is_empty() || keys.starts_with(':') {
@@ -614,7 +614,7 @@ fn the_help_overlay_lists_only_keys_the_keymap_answers_to() {
         }
         for key in keys.split(&[' ', '/', ','][..]).filter(|k| !k.is_empty()) {
             assert!(
-                rtop::ui::help::is_documented_key(key),
+                proctop::ui::help::is_documented_key(key),
                 "help lists {key:?} ({description}) but the keymap has no such binding"
             );
         }
@@ -662,12 +662,12 @@ fn every_help_key_fits_the_column_it_is_rendered_in() {
     // The key column is fixed-width and truncating, so an entry longer than
     // it is silently cut on screen — documentation that reads as complete
     // in the source and is not.
-    for (keys, description) in rtop::ui::help::BINDINGS {
+    for (keys, description) in proctop::ui::help::BINDINGS {
         assert!(
-            keys.chars().count() <= rtop::ui::overlay::LABEL_WIDTH as usize,
+            keys.chars().count() <= proctop::ui::overlay::LABEL_WIDTH as usize,
             "{keys:?} ({description}) is {} chars, column is {}",
             keys.chars().count(),
-            rtop::ui::overlay::LABEL_WIDTH
+            proctop::ui::overlay::LABEL_WIDTH
         );
     }
 }
@@ -841,7 +841,7 @@ fn movement_on_the_disk_and_sensors_tabs_scrolls_nothing() {
     for tab in [Tab::Disk, Tab::Sensors] {
         let mut state = UiState {
             tab,
-            selection: rtop::ui::Selection {
+            selection: proctop::ui::Selection {
                 index: 12,
                 offset: 5,
             },
