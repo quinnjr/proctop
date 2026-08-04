@@ -8,4 +8,5 @@
 pub mod delta;
 pub mod model;
 pub mod sample;
+pub mod sampler;
 pub mod sort;

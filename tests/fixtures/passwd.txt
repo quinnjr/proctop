@@ -1,0 +1,9 @@
+root:x:0:0:root:/root:/bin/bash
+bin:x:1:1:bin:/bin:/usr/bin/nologin
+daemon:x:2:2:daemon:/:/usr/bin/nologin
+http:x:33:33:http:/srv/http:/usr/bin/nologin
+nobody:x:65534:65534:Nobody:/:/usr/bin/nologin
+joseph:x:1000:1000:Joseph R. Quinn,,,:/home/joseph:/usr/bin/zsh
+# a comment line, which passwd files occasionally carry
+
+malformed-line-with-no-colons

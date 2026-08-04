@@ -42,6 +42,17 @@ impl CpuUsage {
     }
 }
 
+/// Total jiffies elapsed across all cores between two readings of the
+/// aggregate `/proc/stat` line — the denominator for per-process usage.
+pub fn total_jiffies(prev: &CpuTimes, cur: &CpuTimes) -> u64 {
+    let fields = |t: &CpuTimes| {
+        // Guest time is already counted inside user/nice, so it is excluded
+        // here for the same reason it is subtracted out in `cpu_usage`.
+        t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq + t.steal
+    };
+    fields(cur).saturating_sub(fields(prev))
+}
+
 /// One process's CPU consumption over the interval, as a fraction of a
 /// single core: `1.0` is one saturated core, `2.0` is two.
 ///

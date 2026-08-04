@@ -1,0 +1,165 @@
+//! The reader layer: walks `/proc` and feeds the parsers.
+//!
+//! This is the only module that performs I/O. Every failure here is expected
+//! rather than exceptional — a process that exits between the directory
+//! listing and the read of its `stat` file yields `ENOENT` on every tick of a
+//! busy machine — so errors drop the affected item and never propagate.
+
+use std::collections::HashMap;
+use std::fs;
+
+use crate::delta::{cpu_usage, process_cpu, total_jiffies};
+use crate::model::{CpuStat, ProcKey, ProcRow, ProcState, Sample};
+use crate::sample::{cpu, memory, process, system, users};
+
+/// Samples the live machine, retaining the previous reading so rates can be
+/// derived.
+#[derive(Debug)]
+pub struct Sampler {
+    page_size: u64,
+    users: users::UserTable,
+    prev_cpu: Option<CpuStat>,
+    /// Cumulative CPU time per process as of the previous sample.
+    prev_times: HashMap<ProcKey, u64>,
+}
+
+impl Sampler {
+    pub fn new() -> Self {
+        Sampler {
+            page_size: procfs::page_size(),
+            users: users::parse_passwd(&read("/etc/passwd")),
+            prev_cpu: None,
+            prev_times: HashMap::new(),
+        }
+    }
+
+    /// Take a reading.
+    ///
+    /// Never fails: a subsystem that cannot be read yields its default
+    /// rather than taking the monitor down. The first sample reports zero
+    /// for every rate, because there is no previous reading to diff against
+    /// and inventing a figure would be worse than showing none.
+    pub fn sample(&mut self) -> Sample {
+        let cpu_stat = cpu::parse_stat(&read("/proc/stat")).unwrap_or_default();
+
+        let (aggregate, cores, elapsed) = match &self.prev_cpu {
+            Some(prev) => (
+                cpu_usage(&prev.total, &cpu_stat.total),
+                // Zip rather than index: a core going offline between
+                // samples shortens the list, and indexing would panic.
+                prev.cores
+                    .iter()
+                    .zip(&cpu_stat.cores)
+                    .map(|(p, c)| cpu_usage(p, c))
+                    .collect(),
+                total_jiffies(&prev.total, &cpu_stat.total),
+            ),
+            None => (
+                Default::default(),
+                vec![Default::default(); cpu_stat.cores.len()],
+                0,
+            ),
+        };
+
+        let mem = memory::parse_meminfo(&read("/proc/meminfo")).unwrap_or_default();
+        let core_count = cpu_stat.cores.len();
+
+        let mut procs = Vec::new();
+        let mut times = HashMap::new();
+        let mut running = 0;
+        let mut threads = 0;
+
+        for pid in pids() {
+            let Some(proc) =
+                process::parse_pid_stat(&read(&format!("/proc/{pid}/stat")), self.page_size)
+            else {
+                // The process exited mid-read. Routine, not an error.
+                continue;
+            };
+
+            let uid = process::parse_status_uid(&read(&format!("/proc/{pid}/status")));
+            let key = proc.key();
+            let cpu_time = proc.cpu_time();
+
+            if proc.state == ProcState::Running {
+                running += 1;
+            }
+            threads += proc.threads;
+            times.insert(key, cpu_time);
+
+            let cpu = self
+                .prev_times
+                .get(&key)
+                .map(|&prev| process_cpu(prev, cpu_time, elapsed, core_count))
+                .unwrap_or(0.0);
+
+            let mem_fraction = if mem.total == 0 {
+                0.0
+            } else {
+                proc.rss as f32 / mem.total as f32
+            };
+
+            procs.push(ProcRow {
+                user: self.username(uid),
+                proc,
+                cpu,
+                mem: mem_fraction,
+            });
+        }
+
+        self.prev_cpu = Some(cpu_stat);
+        self.prev_times = times;
+
+        Sample {
+            cpu: aggregate,
+            cores,
+            mem,
+            load: system::parse_loadavg(&read("/proc/loadavg")).unwrap_or_default(),
+            uptime: system::parse_uptime(&read("/proc/uptime")).unwrap_or_default(),
+            procs,
+            running,
+            threads,
+        }
+    }
+
+    /// The username for a uid, falling back to the number itself when this
+    /// machine has no passwd entry — common under containers and directory
+    /// services, where hiding the row would be worse than showing a number.
+    fn username(&self, uid: Option<u32>) -> String {
+        match uid {
+            Some(uid) => self
+                .users
+                .name(uid)
+                .map(str::to_string)
+                .unwrap_or_else(|| uid.to_string()),
+            None => String::from("?"),
+        }
+    }
+}
+
+impl Default for Sampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Read a file, treating any failure as empty content. Every parser rejects
+/// empty input, so an unreadable file degrades to a missing subsystem rather
+/// than an error path of its own.
+fn read(path: &str) -> String {
+    fs::read_to_string(path).unwrap_or_default()
+}
+
+/// The pids currently present in `/proc`.
+///
+/// Some of these will have exited by the time their `stat` file is read;
+/// that is expected and handled at the call site.
+fn pids() -> Vec<i32> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse().ok())
+        .collect()
+}

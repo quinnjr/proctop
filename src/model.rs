@@ -144,6 +144,28 @@ pub struct ProcRow {
     pub cpu: f32,
     /// Resident memory as a fraction of physical memory.
     pub mem: f32,
+    /// The owning username, or the bare uid when this machine has no passwd
+    /// entry for it — common under containers and directory services.
+    pub user: String,
+}
+
+/// One complete reading of the machine, with every rate already derived.
+///
+/// The UI formats these values and does no accounting arithmetic of its own.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sample {
+    /// Aggregate CPU usage across all cores.
+    pub cpu: crate::delta::CpuUsage,
+    /// Per-core usage, in the order the kernel lists them.
+    pub cores: Vec<crate::delta::CpuUsage>,
+    pub mem: MemInfo,
+    pub load: LoadAvg,
+    pub uptime: std::time::Duration,
+    pub procs: Vec<ProcRow>,
+    /// Processes in the runnable state at the moment of the sample.
+    pub running: usize,
+    /// Threads across all processes.
+    pub threads: i64,
 }
 
 impl MemInfo {
