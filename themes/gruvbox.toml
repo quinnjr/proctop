@@ -1,0 +1,25 @@
+# Gruvbox dark.
+
+cpu_user   = "#b8bb26"
+cpu_system = "#fb4934"
+cpu_nice   = "#83a598"
+cpu_irq    = "#d3869b"
+cpu_iowait = "#8ec07c"
+
+mem_used  = "#b8bb26"
+swap      = "#fb4934"
+
+label     = "#83a598"
+header_fg = "#282828"
+header_bg = "#a89984"
+muted     = "#665c54"
+text      = "#ebdbb2"
+
+selected_fg = "#282828"
+selected_bg = "#d79921"
+status_bg   = "#458588"
+
+warn  = "#fabd2f"
+alert = "#fb4934"
+
+panel_bg = "#3c3836"
