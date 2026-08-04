@@ -5,7 +5,7 @@
 //! listing and the read of its `stat` file yields `ENOENT` on every tick of a
 //! busy machine — so errors drop the affected item and never propagate.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -306,7 +306,13 @@ impl Sampler {
         }
         sockets::sort(&mut found);
 
-        let owners = socket_owners();
+        // Only the listening inodes are ever looked up, and they are a small
+        // fraction of the machine's sockets — ~50 listeners against ~690
+        // established connections. Passing the set in keeps the map, its
+        // name reads and its `Arc` clones proportional to what the view
+        // shows rather than to how busy the machine is.
+        let wanted: HashSet<u64> = found.iter().map(|s| s.inode).collect();
+        let owners = socket_owners(&wanted);
         Some(
             found
                 .into_iter()
@@ -476,7 +482,9 @@ fn read(path: &str) -> String {
 /// Unprivileged that covers only your own processes, which is why the view
 /// says so rather than leaving the column mysteriously blank — `ss -p` has
 /// the same limit.
-fn socket_owners() -> HashMap<u64, (i32, std::sync::Arc<str>)> {
+/// `wanted` is the set of inodes the caller will actually ask about;
+/// everything else on the machine is walked past without being recorded.
+fn socket_owners(wanted: &HashSet<u64>) -> HashMap<u64, (i32, std::sync::Arc<str>)> {
     let mut owners = HashMap::new();
 
     for pid in pids() {
@@ -498,8 +506,11 @@ fn socket_owners() -> HashMap<u64, (i32, std::sync::Arc<str>)> {
             else {
                 continue;
             };
-            // The command is read only once a socket is actually found, so
-            // a process holding none costs no extra read.
+            if !wanted.contains(&inode) {
+                continue;
+            }
+            // The command is read only once a wanted socket is found, so a
+            // process holding none costs no extra read.
             let name = name.get_or_insert_with(|| read(&format!("/proc/{pid}/comm")).trim().into());
             owners.insert(inode, (pid, name.clone()));
         }
