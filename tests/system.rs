@@ -1,4 +1,4 @@
-use rtop::sample::system;
+use proctop::sample::system;
 
 const LOADAVG: &str = include_str!("fixtures/loadavg.txt");
 const UPTIME: &str = include_str!("fixtures/uptime.txt");

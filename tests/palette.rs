@@ -1,5 +1,5 @@
 use ntui::Color;
-use rtop::ui::palette::{BUNDLED, Palette};
+use proctop::ui::palette::{BUNDLED, Palette};
 
 #[test]
 fn ships_the_themes_the_config_can_name() {

@@ -1,4 +1,4 @@
-//! `~/.config/rtop/config.toml`.
+//! `~/.config/proctop/config.toml`.
 //!
 //! Unknown keys are rejected rather than ignored. Silently skipping
 //! `refresh_msec` means the setting appears not to work with nothing
@@ -108,13 +108,13 @@ impl Config {
     }
 }
 
-/// `$XDG_CONFIG_HOME/rtop/config.toml`, falling back to `~/.config`.
+/// `$XDG_CONFIG_HOME/proctop/config.toml`, falling back to `~/.config`.
 pub fn default_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
         .unwrap_or_else(|| PathBuf::from("."));
-    base.join("rtop").join("config.toml")
+    base.join("proctop").join("config.toml")
 }
 
 #[derive(Debug)]

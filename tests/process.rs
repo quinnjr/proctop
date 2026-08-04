@@ -1,5 +1,5 @@
-use rtop::model::ProcState;
-use rtop::sample::process;
+use proctop::model::ProcState;
+use proctop::sample::process;
 
 const PID_STAT: &str = include_str!("fixtures/pid_stat.txt");
 const PAGE: u64 = 4096;

@@ -6,7 +6,7 @@
 
 use ntui::testing::TestTerminal;
 use ntui::{KeyCode, element};
-use rtop::ui::app::{App, AppProps};
+use proctop::ui::app::{App, AppProps};
 
 fn app() -> TestTerminal {
     TestTerminal::new(120, 40, element!(App)).expect("should mount")
@@ -134,12 +134,12 @@ async fn opens_and_closes_the_help_overlay() {
 
     t.send_key(KeyCode::Char('?')).expect("should accept input");
     let text = t.frame_text();
-    assert!(text.contains("rtop — keys"), "{text}");
+    assert!(text.contains("proctop — keys"), "{text}");
     assert!(text.contains("incremental search"), "{text}");
 
     t.send_key(KeyCode::Esc).expect("should accept input");
 
-    assert!(!t.frame_text().contains("rtop — keys"));
+    assert!(!t.frame_text().contains("proctop — keys"));
     assert!(!t.exited(), "Esc should close the overlay, not quit");
 }
 
@@ -323,7 +323,7 @@ async fn the_kill_dialog_asks_before_signalling_anything() {
 #[tokio::test]
 async fn honours_the_configured_sort_column() {
     let config =
-        rtop::config::Config::parse("[processes]\nsort_by = \"pid\"").expect("should parse");
+        proctop::config::Config::parse("[processes]\nsort_by = \"pid\"").expect("should parse");
     let mut t = TestTerminal::new(120, 40, element!(App(config: config))).expect("should mount");
 
     t.tick().await.expect("should tick");
@@ -335,7 +335,7 @@ async fn honours_the_configured_sort_column() {
 async fn honours_a_configured_theme() {
     // Colors are not visible through `frame_text`, so this only checks that
     // a non-default palette mounts and renders.
-    let palette = rtop::ui::palette::Palette::named("mono").expect("bundled");
+    let palette = proctop::ui::palette::Palette::named("mono").expect("bundled");
     let mut t = TestTerminal::new(120, 40, element!(App(palette: palette))).expect("should mount");
 
     t.tick().await.expect("should tick");
@@ -402,7 +402,7 @@ async fn an_open_dialog_is_opaque_over_the_process_table() {
     t.send_key(KeyCode::Char('d')).expect("should accept input");
     assert!(t.frame_text().contains("Send signal"));
 
-    let palette = rtop::ui::palette::Palette::default();
+    let palette = proctop::ui::palette::Palette::default();
     let text = t.frame_text();
     let (row, line) = text
         .lines()

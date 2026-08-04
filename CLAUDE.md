@@ -4,15 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-rtop is an htop-inspired Linux system monitor built on
+The crate, the command and this directory's project are `proctop`. The
+repository and the design docs under `docs/` still say `rtop`, which is what
+it was called before `rtop` turned out to be taken on crates.io — those are
+dated records and are left as written.
+
+proctop is an htop-inspired Linux system monitor built on
 [`ntui`](https://github.com/quinnjr/ntui), an Ink-style TUI library. It has
 two equal goals: a monitor worth using daily, and a demanding dogfood
 harness for `ntui` — a table re-rendering several hundred rows twice a
 second under a hard CPU budget finds API and performance gaps a small
-example never will. When the two conflict, rtop ships what works and the
+example never will. When the two conflict, proctop ships what works and the
 `ntui` gap is fixed upstream.
 
-Linux only. rtop reads `/proc` and `/sys` directly with no portability
+Linux only. proctop reads `/proc` and `/sys` directly with no portability
 layer, and does not accept portability shims.
 
 Design doc: `docs/superpowers/specs/2026-08-04-rtop-design.md`. Sections 10
@@ -21,7 +26,7 @@ things are shaped the way they are.
 
 `Shared`, `use_memo`, `use_list_selection`, `render_once`,
 `TestTerminal::cell`, and `Table`'s selection/viewport/cell-style props were
-all added to `ntui` *for* rtop and shipped in 0.3.0. When rtop needs
+all added to `ntui` *for* proctop and shipped in 0.3.0. When proctop needs
 something from a TUI library, the default is to add it upstream rather than
 work around it locally — but only after the shape has settled here. Develop
 against a path dependency (`ntui = { version = "0.3", path = "../ntui/ntui" }`)
@@ -181,7 +186,7 @@ Most of these are here because something already went wrong.
   every entry appears in `help.rs`'s hand-maintained `BOUND` list — which
   is not derived from `handle_key`, so deleting a keymap arm fails nothing.
   Both the README and that list are checked by hand.
-- rtop keeps its own `ProcessTable` rather than using `ntui::widgets::Table`:
+- proctop keeps its own `ProcessTable` rather than using `ntui::widgets::Table`:
   it right-aligns numeric columns and truncates them from the *left*,
   left-aligns text ones, and prefixes tree guides at depth. None of that is
   general enough to push upstream.

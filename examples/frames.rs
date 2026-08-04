@@ -6,7 +6,7 @@
 
 use ntui::testing::TestTerminal;
 use ntui::{KeyCode, element};
-use rtop::ui::app::App;
+use proctop::ui::app::App;
 
 const WIDTH: u16 = 130;
 const HEIGHT: u16 = 45;

@@ -1,4 +1,4 @@
-use rtop::sample::users;
+use proctop::sample::users;
 
 const PASSWD: &str = include_str!("fixtures/passwd.txt");
 

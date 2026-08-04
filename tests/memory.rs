@@ -1,4 +1,4 @@
-use rtop::sample::memory;
+use proctop::sample::memory;
 
 const MEMINFO: &str = include_str!("fixtures/meminfo.txt");
 

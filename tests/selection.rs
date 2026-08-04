@@ -4,7 +4,7 @@
 //! downstream statement of what rtop needs from it, so a change upstream
 //! that breaks the process table fails here too.
 
-use rtop::ui::Selection;
+use proctop::ui::Selection;
 
 #[test]
 fn moves_down_within_the_visible_window_without_scrolling() {

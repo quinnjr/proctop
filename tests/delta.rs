@@ -1,5 +1,5 @@
-use rtop::delta::cpu_usage;
-use rtop::model::CpuTimes;
+use proctop::delta::cpu_usage;
+use proctop::model::CpuTimes;
 
 /// Floats here come from ratios of small integers, so they are exact enough
 /// to compare tightly; the epsilon only absorbs f32 rounding.
@@ -165,7 +165,7 @@ fn keeps_every_fraction_within_zero_and_one() {
 
 // ---------- refresh pacing ----------
 
-use rtop::delta::should_refresh;
+use proctop::delta::should_refresh;
 use std::time::{Duration, Instant};
 
 #[test]
@@ -208,7 +208,7 @@ fn the_denominator_does_not_double_count_guest_time_either() {
         ..CpuTimes::default()
     };
 
-    assert_eq!(rtop::delta::total_jiffies(&prev, &cur), 100);
+    assert_eq!(proctop::delta::total_jiffies(&prev, &cur), 100);
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn the_denominator_clamps_a_counter_that_went_backwards() {
         ..CpuTimes::default()
     };
 
-    assert_eq!(rtop::delta::total_jiffies(&prev, &cur), 0);
+    assert_eq!(proctop::delta::total_jiffies(&prev, &cur), 0);
 }
 
 #[test]
@@ -238,5 +238,5 @@ fn the_denominator_saturates_rather_than_overflowing() {
         ..CpuTimes::default()
     };
 
-    let _ = rtop::delta::total_jiffies(&CpuTimes::default(), &cur);
+    let _ = proctop::delta::total_jiffies(&CpuTimes::default(), &cur);
 }

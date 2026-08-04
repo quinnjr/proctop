@@ -1,5 +1,5 @@
-use rtop::model::SensorKind;
-use rtop::sample::sensors::{parse_battery, parse_hwmon};
+use proctop::model::SensorKind;
+use proctop::sample::sensors::{parse_battery, parse_hwmon};
 
 fn files(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs

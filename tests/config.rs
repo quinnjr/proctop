@@ -1,5 +1,5 @@
-use rtop::config::Config;
-use rtop::sort::SortKey;
+use proctop::config::Config;
+use proctop::sort::SortKey;
 
 #[test]
 fn an_absent_config_is_not_an_error() {

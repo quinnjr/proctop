@@ -1,5 +1,5 @@
-use rtop::model::{Proc, ProcRow};
-use rtop::sort::{SortKey, sort_procs};
+use proctop::model::{Proc, ProcRow};
+use proctop::sort::{SortKey, sort_procs};
 
 fn row(pid: i32, name: &str, cpu: f32, rss: u64, cpu_time: u64) -> ProcRow {
     ProcRow {

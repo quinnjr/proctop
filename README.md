@@ -1,4 +1,4 @@
-# rtop
+# proctop
 
 An htop-inspired Linux system monitor, built on
 [ntui](https://github.com/quinnjr/ntui).
@@ -9,13 +9,17 @@ twice a second under a hard CPU budget — that pressure finds API and
 performance gaps a counter example never will. Every one it finds is
 recorded in [the design doc](docs/superpowers/specs/2026-08-04-rtop-design.md).
 
-Linux only. rtop reads `/proc` and `/sys` directly, with no portability
+Linux only. proctop reads `/proc` and `/sys` directly, with no portability
 layer. Needs [`ntui`](https://crates.io/crates/ntui) 0.3, which carries the
 APIs this project's dogfooding produced.
 
 ```
-cargo run --release
+cargo install proctop
+proctop
 ```
+
+The crate is `proctop` because `rtop` was taken on crates.io in 2018 by
+another Rust system monitor. From a checkout, `cargo run --release`.
 
 Four tabs — processes, disk, network, sensors — plus search, a command line, a
 detail pane, kill and renice, tree view, a config file, and themes. All
@@ -67,7 +71,7 @@ accumulated CPU time / command.
 listening on: protocol, address, port, accept queue, owning user and
 process. Sorted so the exposed ones come first — a service bound to
 `0.0.0.0` is reachable from the network and one bound to `127.0.0.1` is
-not, and that difference is invisible everywhere else in rtop.
+not, and that difference is invisible everywhere else in proctop.
 
 Attributing a socket to a process means walking every `/proc/<pid>/fd`, so
 it happens only while that tab is open. Unprivileged you can only read your
@@ -89,7 +93,7 @@ subtract-and-divide gets both wrong:
 
 ## Configuration
 
-`~/.config/rtop/config.toml`, honouring `XDG_CONFIG_HOME`. A missing file
+`~/.config/proctop/config.toml`, honouring `XDG_CONFIG_HOME`. A missing file
 is fine; a *broken* one is fatal and reported, because a setting that
 silently does nothing is worse than a refusal to start. Unknown keys are
 rejected for the same reason.
@@ -107,7 +111,7 @@ sort_desc = true
 
 Flags (`--refresh`, `--sort`, `--theme`, `--tree`, `-H`, `--config`)
 override the file for one run and are never written back.
-`rtop --show-config-path` prints where it looks.
+`proctop --show-config-path` prints where it looks.
 
 ## Cost
 
@@ -123,7 +127,7 @@ and dropping ~800 file reads per tick roughly halved the sample.
 
 That uid is the process's **effective** one, not its real one — the kernel
 builds the inode's ownership from `cred->euid`. The two differ only for a
-process running through a setuid binary, which rtop attributes to its target
+process running through a setuid binary, which proctop attributes to its target
 user. htop shows the same thing.
 
 Sensors are the exception and are handled specially. This machine exposes

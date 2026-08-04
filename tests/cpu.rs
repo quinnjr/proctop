@@ -1,4 +1,4 @@
-use rtop::sample::cpu;
+use proctop::sample::cpu;
 
 const PROC_STAT: &str = include_str!("fixtures/proc_stat.txt");
 
