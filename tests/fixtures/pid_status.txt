@@ -1,0 +1,20 @@
+Name:	head
+Umask:	0022
+State:	R (running)
+Tgid:	95885
+Ngid:	0
+Pid:	95885
+PPid:	95875
+TracerPid:	0
+Uid:	1000	1000	1000	1000
+Gid:	1000	1000	1000	1000
+FDSize:	64
+Groups:	33 944 967 998 1000 
+NStgid:	95885
+NSpid:	95885
+NSpgid:	95875
+NSsid:	95875
+Kthread:	0
+VmPeak:	    6136 kB
+VmSize:	    6136 kB
+VmLck:	       0 kB
