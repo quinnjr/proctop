@@ -43,6 +43,109 @@ pub struct MemInfo {
     pub swap_free: u64,
 }
 
+/// One reading of `/proc/loadavg`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LoadAvg {
+    pub one: f32,
+    pub five: f32,
+    pub fifteen: f32,
+    /// Tasks currently runnable.
+    pub running: u32,
+    /// Tasks that exist at all.
+    pub total: u32,
+}
+
+/// The single-character process state from `/proc/[pid]/stat`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProcState {
+    Running,
+    Sleeping,
+    /// Blocked in the kernel and not killable — usually waiting on I/O.
+    UninterruptibleSleep,
+    Zombie,
+    Stopped,
+    TracingStop,
+    Idle,
+    Dead,
+    /// A state this kernel reports that rtop does not recognize. Kept rather
+    /// than discarded, so an unfamiliar kernel does not hide processes.
+    #[default]
+    Unknown,
+}
+
+impl ProcState {
+    /// The letter htop displays in the `S` column.
+    pub fn as_char(self) -> char {
+        match self {
+            ProcState::Running => 'R',
+            ProcState::Sleeping => 'S',
+            ProcState::UninterruptibleSleep => 'D',
+            ProcState::Zombie => 'Z',
+            ProcState::Stopped => 'T',
+            ProcState::TracingStop => 't',
+            ProcState::Idle => 'I',
+            ProcState::Dead => 'X',
+            ProcState::Unknown => '?',
+        }
+    }
+}
+
+/// Identifies a process across samples.
+///
+/// The start time is part of the key because Linux recycles PIDs: without
+/// it, a dead process's accumulated CPU time is attributed to whatever new
+/// process inherits its number, producing impossible percentages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProcKey {
+    pub pid: i32,
+    pub starttime: u64,
+}
+
+/// One process, as of a single sample. CPU times are cumulative jiffies;
+/// memory figures are bytes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Proc {
+    pub pid: i32,
+    pub ppid: i32,
+    pub name: String,
+    pub state: ProcState,
+    pub utime: u64,
+    pub stime: u64,
+    pub priority: i64,
+    pub nice: i64,
+    pub threads: i64,
+    /// Jiffies since boot at which this process started.
+    pub starttime: u64,
+    pub vsize: u64,
+    pub rss: u64,
+}
+
+impl Proc {
+    /// Total CPU time consumed since the process started.
+    pub fn cpu_time(&self) -> u64 {
+        self.utime + self.stime
+    }
+
+    /// This process's identity across samples.
+    pub fn key(&self) -> ProcKey {
+        ProcKey {
+            pid: self.pid,
+            starttime: self.starttime,
+        }
+    }
+}
+
+/// A process plus the figures derived from comparing it against the previous
+/// sample. This is what the table renders.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProcRow {
+    pub proc: Proc,
+    /// CPU consumption as a fraction of one core: `1.0` is a saturated core.
+    pub cpu: f32,
+    /// Resident memory as a fraction of physical memory.
+    pub mem: f32,
+}
+
 impl MemInfo {
     /// Memory that is genuinely spoken for: everything that is neither free
     /// nor reclaimable.

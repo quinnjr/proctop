@@ -42,6 +42,29 @@ impl CpuUsage {
     }
 }
 
+/// One process's CPU consumption over the interval, as a fraction of a
+/// single core: `1.0` is one saturated core, `2.0` is two.
+///
+/// `total_jiffy_delta` is the change in the aggregate `/proc/stat` line,
+/// which already sums across every core — dividing by it and multiplying by
+/// the core count is what rescales the figure to a single core, the way htop
+/// reports it.
+///
+/// Returns zero for an empty interval, an unknown core count, or a counter
+/// that went backwards, rather than NaN or a wrapped-around delta.
+pub fn process_cpu(
+    prev_cpu_time: u64,
+    cur_cpu_time: u64,
+    total_jiffy_delta: u64,
+    cores: usize,
+) -> f32 {
+    if total_jiffy_delta == 0 || cores == 0 {
+        return 0.0;
+    }
+    let used = cur_cpu_time.saturating_sub(prev_cpu_time);
+    used as f32 / total_jiffy_delta as f32 * cores as f32
+}
+
 /// Fraction of the interval represented by each CPU state.
 ///
 /// Two corrections happen here that a naive subtract-and-divide misses:
