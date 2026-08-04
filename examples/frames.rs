@@ -30,8 +30,9 @@ async fn main() {
     show("Processes", &terminal);
 
     for (label, keys) in [
-        ("I/O", vec![KeyCode::Char('2')]),
-        ("Sensors", vec![KeyCode::Char('3')]),
+        ("Disk", vec![KeyCode::Char('2')]),
+        ("Network", vec![KeyCode::Char('3')]),
+        ("Sensors", vec![KeyCode::Char('4')]),
         ("Tree view", vec![KeyCode::Char('1'), KeyCode::Char('t')]),
         ("Help", vec![KeyCode::Char('t'), KeyCode::Char('?')]),
         ("Detail", vec![KeyCode::Esc, KeyCode::Enter]),
@@ -43,11 +44,15 @@ async fn main() {
         for key in keys {
             terminal.send_key(key).expect("should accept input");
         }
-        // Sensors are only read while their tab is showing, so give the
-        // sampler a moment after switching before capturing the frame.
-        for _ in 0..40 {
+        // Sensors and sockets are read only while their own tab is
+        // showing, and the sampling loop picks that up on its next tick —
+        // so a switch can wait a full refresh interval before the data
+        // lands. Poll past that rather than capturing the placeholder.
+        for _ in 0..120 {
             terminal.tick().await.expect("should tick");
-            if !terminal.frame_text().contains("Reading sensors") {
+            let text = terminal.frame_text();
+            let pending = text.contains("Reading sensors") || text.contains("reading sockets");
+            if !pending {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;

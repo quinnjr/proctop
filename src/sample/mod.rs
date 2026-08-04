@@ -11,5 +11,6 @@ pub mod memory;
 pub mod net;
 pub mod process;
 pub mod sensors;
+pub mod sockets;
 pub mod system;
 pub mod users;

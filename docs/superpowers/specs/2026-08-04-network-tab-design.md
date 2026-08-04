@@ -153,8 +153,13 @@ So it gets the treatment sensors got, for the same reason:
 - refreshed at most every 2 seconds even then.
 
 `Sample::sockets` is `Option<Shared<Vec<ListeningSocket>>>`, matching
-`sensors`: `None` means "not read", `Some(vec![])` means "read, nothing is
-listening". They render differently.
+`sensors`: `None` means "not read" and renders "reading sockets…";
+`Some(vec![])` means "read, nothing is listening". They render differently.
+
+There is deliberately no third "unavailable" state. `/proc/net/*` is
+guaranteed by procfs on every Linux, so it falls on the same side of the
+line as `mem`/`load`/`uptime` rather than with `disks`/`nets`/`sensors`,
+which a restricted container can legitimately deny.
 
 ### The privilege cliff
 
@@ -172,11 +177,10 @@ owning uid directly, so it is always correct and costs nothing.
 
 ## 7. Errors
 
-Unchanged from the rest of the project. An unreadable `/proc/net/*` yields
-`None` and the section renders "unavailable" rather than "nothing is
-listening". A malformed line is skipped; the rest of the file is kept. An
-unreadable `/proc/<pid>/fd` drops that process from the map silently — it
-is the common case, not a failure.
+A malformed line is skipped; the rest of the file is kept. An unreadable
+`/proc/<pid>/fd` drops that process from the map silently — it is the
+common case, not a failure. See §6 for why `/proc/net/*` gets no
+"unavailable" state.
 
 ## 8. Scrolling
 

@@ -30,7 +30,7 @@ are built.
 | `g` / `G`, `Home` / `End` | First / last row |
 | `C-d` / `C-u` | Half page down / up |
 | `PgDn` / `PgUp` | Full page down / up |
-| `Tab` / `⇧Tab`, `1`–`3` | Switch tab |
+| `Tab` / `⇧Tab`, `1`–`4` | Switch tab |
 | `<` / `>` | Previous / next sort column |
 | `I` | Reverse the sort direction |
 | `t` | Tree view |
@@ -61,8 +61,18 @@ load average, uptime, task and thread counts, and per-process PID / user /
 priority / nice / virtual and resident memory / state / CPU% / MEM% /
 accumulated CPU time / command.
 
-**I/O** — per-device disk and per-interface network throughput, busiest
-first, with idle devices hidden.
+**Disk** — per-device throughput, busiest first, with idle devices hidden.
+
+**Network** — per-interface throughput, and every socket the machine is
+listening on: protocol, address, port, accept queue, owning user and
+process. Sorted so the exposed ones come first — a service bound to
+`0.0.0.0` is reachable from the network and one bound to `127.0.0.1` is
+not, and that difference is invisible everywhere else in rtop.
+
+Attributing a socket to a process means walking every `/proc/<pid>/fd`, so
+it happens only while that tab is open. Unprivileged you can only read your
+own processes, so the tab says how many rows it could not attribute rather
+than leaving the column mysteriously blank — `ss -p` has the same limit.
 
 **Sensors** — temperatures, fan speeds, and battery from `hwmon`.
 

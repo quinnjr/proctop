@@ -18,17 +18,19 @@ use crate::ui::Selection;
 pub enum Tab {
     #[default]
     Processes,
-    Io,
+    Disk,
+    Network,
     Sensors,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Processes, Tab::Io, Tab::Sensors];
+    pub const ALL: [Tab; 4] = [Tab::Processes, Tab::Disk, Tab::Network, Tab::Sensors];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Processes => "Processes",
-            Tab::Io => "I/O",
+            Tab::Disk => "Disk",
+            Tab::Network => "Network",
             Tab::Sensors => "Sensors",
         }
     }
@@ -235,7 +237,7 @@ fn handle_normal_key(
 
         KeyCode::Tab | KeyCode::Char('\t') => state.tab = step_tab(state.tab, 1),
         KeyCode::BackTab => state.tab = step_tab(state.tab, -1),
-        KeyCode::Char(c @ '1'..='3') => {
+        KeyCode::Char(c @ '1'..='4') => {
             state.tab = Tab::ALL[c as usize - '1' as usize];
         }
 

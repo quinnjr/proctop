@@ -5,13 +5,13 @@
 
 #![cfg(target_os = "linux")]
 
-use rtop::sampler::Sampler;
+use rtop::sampler::{Sampler, Wanted};
 
 #[test]
 fn samples_the_running_machine() {
     let mut sampler = Sampler::new();
 
-    let sample = sampler.sample(false);
+    let sample = sampler.sample(Wanted::default());
 
     assert!(sample.mem.total > 0, "the machine has memory");
     assert!(
@@ -29,7 +29,7 @@ fn finds_the_test_process_itself() {
     let me = std::process::id() as i32;
     let mut sampler = Sampler::new();
 
-    let sample = sampler.sample(false);
+    let sample = sampler.sample(Wanted::default());
     let row = sample
         .procs
         .iter()
@@ -47,7 +47,7 @@ fn reports_no_cpu_usage_on_the_very_first_sample() {
     // and htop shows a first frame of zeros for the same reason.
     let mut sampler = Sampler::new();
 
-    let first = sampler.sample(false);
+    let first = sampler.sample(Wanted::default());
 
     assert_eq!(first.cpu.busy(), 0.0);
     assert!(first.procs.iter().all(|r| r.cpu == 0.0));
@@ -57,9 +57,9 @@ fn reports_no_cpu_usage_on_the_very_first_sample() {
 fn produces_percentages_within_range_on_the_second_sample() {
     let mut sampler = Sampler::new();
 
-    sampler.sample(false);
+    sampler.sample(Wanted::default());
     std::thread::sleep(std::time::Duration::from_millis(120));
-    let second = sampler.sample(false);
+    let second = sampler.sample(Wanted::default());
 
     assert!((0.0..=1.0).contains(&second.cpu.busy()));
     let cores = second.cores.len() as f32;
@@ -84,7 +84,7 @@ fn does_not_read_sensors_unless_they_are_being_looked_at() {
     // pushed rtop over its CPU budget.
     let mut sampler = Sampler::new();
 
-    let sample = sampler.sample(false);
+    let sample = sampler.sample(Wanted::default());
 
     // `None`, not an empty list: "not read" and "this machine has none" are
     // different facts, and the sensors view says something different about
@@ -97,7 +97,10 @@ fn does_not_read_sensors_unless_they_are_being_looked_at() {
 fn reads_sensors_when_they_are() {
     let mut sampler = Sampler::new();
 
-    let sample = sampler.sample(true);
+    let sample = sampler.sample(Wanted {
+        sensors: true,
+        ..Wanted::default()
+    });
 
     let sensors = sample.sensors.expect("asked for, so read");
     // Not every machine has hwmon — VMs and containers generally do not —
@@ -114,9 +117,87 @@ fn keeps_showing_the_last_sensor_reading_between_refreshes() {
     // Switching to the sensors tab must not show a blank screen while the
     // next refresh is due.
     let mut sampler = Sampler::new();
-    let first = sampler.sample(true);
+    let want = Wanted {
+        sensors: true,
+        ..Wanted::default()
+    };
+    let first = sampler.sample(want);
 
-    let second = sampler.sample(true);
+    let second = sampler.sample(want);
 
     assert_eq!(first.sensors, second.sensors);
+}
+
+// ---------- listening sockets ----------
+
+#[test]
+fn does_not_read_sockets_unless_they_are_being_looked_at() {
+    // Attributing a socket to a process means walking every /proc/<pid>/fd
+    // and readlinking each entry — ~12ms on a normal machine, several times
+    // the rest of a sample. Not worth paying for a tab nobody has open.
+    let mut sampler = Sampler::new();
+
+    let sample = sampler.sample(Wanted::default());
+
+    assert_eq!(sample.sockets, None);
+}
+
+#[test]
+fn reads_sockets_when_they_are() {
+    let mut sampler = Sampler::new();
+
+    let sample = sampler.sample(Wanted {
+        sockets: true,
+        ..Wanted::default()
+    });
+
+    let sockets = sample.sockets.expect("asked for, so read");
+    // Any Linux box is listening on something, but assert only on coherence
+    // rather than on a particular service being present.
+    for listening in sockets.iter() {
+        assert!(!listening.user.is_empty());
+        assert!(listening.socket.local.port() > 0);
+    }
+}
+
+#[test]
+fn attributes_at_least_one_socket_to_a_process_it_can_read() {
+    // Unprivileged, only our own processes are attributable — but the test
+    // binary owns at least the sockets it can see, so if the machine is
+    // listening on anything we own, the join must find it.
+    let mut sampler = Sampler::new();
+
+    let sample = sampler.sample(Wanted {
+        sockets: true,
+        ..Wanted::default()
+    });
+    let sockets = sample.sockets.expect("asked for");
+
+    let ours = sockets
+        .iter()
+        .filter(|s| s.socket.uid == unsafe { libc::getuid() })
+        .count();
+    let attributed = sockets.iter().filter(|s| s.process.is_some()).count();
+
+    // Either we own no listening sockets, or some of them resolved.
+    assert!(
+        ours == 0 || attributed > 0,
+        "{ours} sockets owned by this uid, none attributed"
+    );
+}
+
+#[test]
+fn keeps_showing_the_last_socket_reading_between_refreshes() {
+    let mut sampler = Sampler::new();
+    let first = sampler.sample(Wanted {
+        sockets: true,
+        ..Wanted::default()
+    });
+
+    let second = sampler.sample(Wanted {
+        sockets: true,
+        ..Wanted::default()
+    });
+
+    assert_eq!(first.sockets, second.sockets);
 }

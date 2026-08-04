@@ -234,6 +234,105 @@ impl Counters for NetStat {
     }
 }
 
+/// Which `/proc/net` file a socket came from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Protocol {
+    #[default]
+    Tcp,
+    Tcp6,
+    Udp,
+    Udp6,
+}
+
+impl Protocol {
+    /// The label shown in the PROTO column.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Protocol::Tcp => "tcp",
+            Protocol::Tcp6 => "tcp6",
+            Protocol::Udp => "udp",
+            Protocol::Udp6 => "udp6",
+        }
+    }
+
+    /// Whether addresses in this file are 16 bytes rather than 4.
+    pub fn is_v6(self) -> bool {
+        matches!(self, Protocol::Tcp6 | Protocol::Udp6)
+    }
+
+    /// UDP has no listening state and no accept queue.
+    pub fn is_tcp(self) -> bool {
+        matches!(self, Protocol::Tcp | Protocol::Tcp6)
+    }
+}
+
+/// How reachable a bound address is — the fact this view exists to show.
+///
+/// Ordered so sorting puts the attack surface first: a wildcard bind is
+/// reachable from any interface, a loopback bind from none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Exposure {
+    /// Bound to every interface — `0.0.0.0` or `::`.
+    Exposed,
+    /// Bound to one specific address.
+    Interface,
+    /// Reachable only from this machine.
+    Loopback,
+}
+
+impl Exposure {
+    pub fn of(addr: &std::net::SocketAddr) -> Exposure {
+        let ip = addr.ip();
+        if ip.is_unspecified() {
+            Exposure::Exposed
+        } else if ip.is_loopback() {
+            Exposure::Loopback
+        } else {
+            Exposure::Interface
+        }
+    }
+
+    /// The word shown beside the address.
+    pub fn label(self) -> &'static str {
+        match self {
+            Exposure::Exposed => "all",
+            Exposure::Interface => "iface",
+            Exposure::Loopback => "local",
+        }
+    }
+}
+
+/// One socket the machine is listening on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Socket {
+    pub protocol: Protocol,
+    pub local: std::net::SocketAddr,
+    pub uid: u32,
+    /// Socket inode — the join key to a process via `/proc/<pid>/fd`.
+    pub inode: u64,
+    /// Connections established and waiting to be accepted. `None` for UDP,
+    /// which has no accept queue at all — a different fact from having an
+    /// empty one.
+    pub accept_queue: Option<u32>,
+}
+
+impl Socket {
+    pub fn exposure(&self) -> Exposure {
+        Exposure::of(&self.local)
+    }
+}
+
+/// A listening socket with its owner resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListeningSocket {
+    pub socket: Socket,
+    pub user: Arc<str>,
+    /// `None` when the owning process could not be determined, which is the
+    /// normal unprivileged case rather than an error: `/proc/<pid>/fd` is
+    /// readable only for your own processes.
+    pub process: Option<(i32, Arc<str>)>,
+}
+
 /// A process plus the figures derived from comparing it against the previous
 /// sample. This is what the table renders.
 #[derive(Clone, Debug, PartialEq)]
@@ -286,6 +385,10 @@ pub struct Sample {
     /// each. Reporting an unreadable subsystem as empty is a lie a
     /// restricted container would be told.
     pub sensors: Option<ntui::Shared<Vec<Sensor>>>,
+    /// Sockets the machine is listening on, or `None` when they were not
+    /// read for this sample — attribution is expensive, so they are read
+    /// only while something is displaying them.
+    pub sockets: Option<ntui::Shared<Vec<ListeningSocket>>>,
 }
 
 impl Default for ProcRow {

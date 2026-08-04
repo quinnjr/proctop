@@ -294,17 +294,29 @@ fn filters_to_the_selected_processs_owner_and_back() {
 fn cycles_tabs_with_tab_and_selects_them_by_number() {
     let mut state = UiState::default();
 
-    press(&mut state, KeyCode::Tab);
-    assert_eq!(state.tab, Tab::Io);
-
-    press(&mut state, KeyCode::Tab);
-    assert_eq!(state.tab, Tab::Sensors);
-
-    press(&mut state, KeyCode::Tab);
-    assert_eq!(state.tab, Tab::Processes, "should wrap");
+    for expected in [Tab::Disk, Tab::Network, Tab::Sensors, Tab::Processes] {
+        press(&mut state, KeyCode::Tab);
+        assert_eq!(state.tab, expected, "Tab should advance to {expected:?}");
+    }
 
     press(&mut state, KeyCode::Char('3'));
+    assert_eq!(state.tab, Tab::Network);
+    press(&mut state, KeyCode::Char('4'));
     assert_eq!(state.tab, Tab::Sensors);
+}
+
+#[test]
+fn every_tab_has_a_number_key_and_they_agree_with_the_order() {
+    // The digits are computed from the enum order; a tab added without a
+    // digit, or a digit that lands on the wrong tab, is silent otherwise.
+    for (i, expected) in Tab::ALL.iter().enumerate() {
+        let mut state = UiState::default();
+        let digit = char::from_digit(i as u32 + 1, 10).expect("one digit per tab");
+
+        press(&mut state, KeyCode::Char(digit));
+
+        assert_eq!(state.tab, *expected, "key {digit}");
+    }
 }
 
 // ---------- overlays ----------

@@ -11,10 +11,25 @@ use std::time::{Duration, Instant};
 
 use crate::delta::{cpu_usage, io_rates, process_cpu, should_refresh, total_jiffies};
 use crate::model::{
-    CpuStat, DiskStat, IoRate, NetStat, ProcKey, ProcRow, ProcState, Sample, Sensor,
+    CpuStat, DiskStat, IoRate, ListeningSocket, NetStat, ProcKey, ProcRow, ProcState, Protocol,
+    Sample, Sensor, Socket,
 };
-use crate::sample::{cpu, disk, memory, net, process, sensors, system, users};
+use crate::sample::{cpu, disk, memory, net, process, sensors, sockets, system, users};
 use ntui::Shared;
+
+/// Which of the expensive optional subsystems a sample should include.
+///
+/// Both are gated rather than always-on because each costs more than the
+/// whole rest of a sample, and each serves exactly one tab. A struct rather
+/// than a pair of bools so adding a third does not churn every call site.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wanted {
+    /// Hardware readings — ~30ms of mostly real SMBus I/O.
+    pub sensors: bool,
+    /// Listening sockets with their owning process — ~12ms, since the only
+    /// way to map a socket inode to a pid is to walk every `/proc/<pid>/fd`.
+    pub sockets: bool,
+}
 
 /// Samples the live machine, retaining the previous reading so rates can be
 /// derived.
@@ -37,6 +52,8 @@ pub struct Sampler {
     /// something immediately rather than a blank screen.
     sensors: Shared<Vec<Sensor>>,
     sensors_at: Option<Instant>,
+    listening: Shared<Vec<ListeningSocket>>,
+    listening_at: Option<Instant>,
     /// Interned usernames, so a row's user costs a refcount bump rather
     /// than an allocation.
     user_names: HashMap<u32, std::sync::Arc<str>>,
@@ -54,6 +71,8 @@ impl Sampler {
             prev_nets: None,
             sensors: Shared::default(),
             sensors_at: None,
+            listening: Shared::default(),
+            listening_at: None,
             user_names: HashMap::new(),
             unknown_user: "?".into(),
         }
@@ -73,7 +92,7 @@ impl Sampler {
     /// guarantees those files on every Linux, so a failure there is not a
     /// case worth a second rendering path — it is a broken kernel, and the
     /// zeros are as good a signal as anything.
-    pub fn sample(&mut self, want_sensors: bool) -> Sample {
+    pub fn sample(&mut self, wanted: Wanted) -> Sample {
         // An unreadable `/proc/stat` must not become a baseline: storing a
         // zeroed reading makes the next tick diff a real counter against
         // zero, which reports the machine's since-boot average as if it
@@ -175,7 +194,8 @@ impl Sampler {
             threads,
             disks: disk_rates,
             nets: net_rates,
-            sensors: self.sensors(want_sensors, now),
+            sensors: self.sensors(wanted.sensors, now),
+            sockets: self.listening(wanted.sockets, now),
         }
     }
 
@@ -200,6 +220,46 @@ impl Sampler {
         // between refreshes are free, and deep-copying 82 readings with two
         // owned strings each is not free.
         Some(self.sensors.clone())
+    }
+
+    /// Sockets the machine is listening on, refreshed at most every
+    /// [`SOCKET_INTERVAL`] and only while something is displaying them.
+    ///
+    /// The expensive half is attribution: the only way to map a socket
+    /// inode to a process is to walk every readable `/proc/<pid>/fd` and
+    /// readlink each entry looking for `socket:[<inode>]`.
+    fn listening(&mut self, want: bool, now: Instant) -> Option<Shared<Vec<ListeningSocket>>> {
+        if !want {
+            return None;
+        }
+        if should_refresh(self.listening_at, now, SOCKET_INTERVAL) {
+            self.listening = Shared::new(self.read_listening());
+            self.listening_at = Some(now);
+        }
+        Some(self.listening.clone())
+    }
+
+    fn read_listening(&mut self) -> Vec<ListeningSocket> {
+        let mut found: Vec<Socket> = Vec::new();
+        for (path, protocol) in [
+            ("/proc/net/tcp", Protocol::Tcp),
+            ("/proc/net/tcp6", Protocol::Tcp6),
+            ("/proc/net/udp", Protocol::Udp),
+            ("/proc/net/udp6", Protocol::Udp6),
+        ] {
+            found.extend(sockets::parse(&read(path), protocol));
+        }
+        sockets::sort(&mut found);
+
+        let owners = socket_owners();
+        found
+            .into_iter()
+            .map(|socket| ListeningSocket {
+                user: self.username(Some(socket.uid)),
+                process: owners.get(&socket.inode).cloned(),
+                socket,
+            })
+            .collect()
     }
 
     /// The username for a uid, falling back to the number itself when this
@@ -235,6 +295,10 @@ impl Default for Sampler {
         Self::new()
     }
 }
+
+/// How often listening sockets are refreshed while they are on screen.
+/// A bound port is not a fast-moving quantity.
+const SOCKET_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How often hardware readings are refreshed while they are on screen.
 /// Temperatures and fan speeds move on a scale of seconds.
@@ -346,6 +410,45 @@ fn read_optional(path: &str) -> Option<String> {
 /// function is otherwise about.
 fn read(path: &str) -> String {
     read_optional(path).unwrap_or_default()
+}
+
+/// Map socket inode to the process holding it.
+///
+/// There is no index for this: the only route is to walk every readable
+/// `/proc/<pid>/fd` and readlink each entry, matching `socket:[<inode>]`.
+/// Unprivileged that covers only your own processes, which is why the view
+/// says so rather than leaving the column mysteriously blank — `ss -p` has
+/// the same limit.
+fn socket_owners() -> HashMap<u64, (i32, std::sync::Arc<str>)> {
+    let mut owners = HashMap::new();
+
+    for pid in pids() {
+        let Ok(entries) = fs::read_dir(format!("/proc/{pid}/fd")) else {
+            // Not ours to read, or the process exited. Both routine.
+            continue;
+        };
+        let mut name: Option<std::sync::Arc<str>> = None;
+
+        for entry in entries.flatten() {
+            let Ok(target) = fs::read_link(entry.path()) else {
+                continue;
+            };
+            let Some(inode) = target
+                .to_str()
+                .and_then(|t| t.strip_prefix("socket:["))
+                .and_then(|t| t.strip_suffix(']'))
+                .and_then(|t| t.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            // The command is read only once a socket is actually found, so
+            // a process holding none costs no extra read.
+            let name = name.get_or_insert_with(|| read(&format!("/proc/{pid}/comm")).trim().into());
+            owners.insert(inode, (pid, name.clone()));
+        }
+    }
+
+    owners
 }
 
 /// The uid owning `/proc/<pid>`, which is the process's **effective** uid.

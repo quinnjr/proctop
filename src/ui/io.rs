@@ -1,4 +1,7 @@
-//! The I/O tab: per-device disk and per-interface network throughput.
+//! The Disk tab: per-device throughput.
+//!
+//! Network throughput lives in the Network tab, beside the sockets it
+//! explains — `ui::network` shares the section helpers here.
 
 use ntui::props::{Dimension, FlexDirection, TextProps, TextWrap, ViewProps};
 use ntui::style::{Color, Weight};
@@ -15,7 +18,7 @@ const BAR: usize = 20;
 
 /// Rows a section spends on its heading and column header before it can
 /// show a single device.
-const CHROME: usize = 2;
+pub(crate) const CHROME: usize = 2;
 
 /// The scale each bar is drawn against, in bytes per second.
 ///
@@ -26,25 +29,25 @@ const CHROME: usize = 2;
 const FULL_SCALE: f32 = 100.0 * 1024.0 * 1024.0;
 
 #[derive(Clone, PartialEq, Default)]
-pub struct IoViewProps {
+pub struct DiskViewProps {
     pub sample: Shared<Sample>,
     pub palette: Palette,
     /// Rows available for the whole tab.
     pub height: u16,
 }
 
-pub struct IoView;
+pub struct DiskView;
 
-impl Component for IoView {
-    type Props = IoViewProps;
+impl Component for DiskView {
+    type Props = DiskViewProps;
 
-    fn render(props: &IoViewProps, _hooks: &mut Hooks) -> Element {
-        IoView::render_tree(props)
+    fn render(props: &DiskViewProps, _hooks: &mut Hooks) -> Element {
+        DiskView::render_tree(props)
     }
 }
 
-impl IoView {
-    fn render_tree(props: &IoViewProps) -> Element {
+impl DiskView {
+    fn render_tree(props: &DiskViewProps) -> Element {
         let palette = &props.palette;
         let sample = &props.sample;
 
@@ -93,7 +96,7 @@ impl IoView {
 
 /// Divide `budget` between two lists by demand, giving neither more than it
 /// can use and preferring an even split when both want more than their half.
-fn split(budget: usize, first: usize, second: usize) -> (usize, usize) {
+pub(crate) fn split(budget: usize, first: usize, second: usize) -> (usize, usize) {
     if first + second <= budget {
         return (first, second);
     }
@@ -108,7 +111,7 @@ fn split(budget: usize, first: usize, second: usize) -> (usize, usize) {
 }
 
 /// Devices currently moving data, busiest first.
-fn active(rates: &[IoRate]) -> Vec<&IoRate> {
+pub(crate) fn active(rates: &[IoRate]) -> Vec<&IoRate> {
     let mut active: Vec<&IoRate> = rates
         .iter()
         .filter(|r| r.read_per_sec > 0 || r.write_per_sec > 0)
@@ -120,7 +123,7 @@ fn active(rates: &[IoRate]) -> Vec<&IoRate> {
 /// One titled list, rendered into at most `available` terminal rows —
 /// heading and column header included, so nothing here can overflow the
 /// budget it was given.
-fn section(
+pub(crate) fn section(
     title: &str,
     read_label: &str,
     write_label: &str,
@@ -160,7 +163,7 @@ fn section(
 }
 
 /// A one-line message standing in for a list.
-fn notice(text: &str, color: ntui::Color) -> Element {
+pub(crate) fn notice(text: &str, color: ntui::Color) -> Element {
     Element::view(
         ViewProps {
             height: Dimension::Cells(1),
@@ -175,7 +178,7 @@ fn notice(text: &str, color: ntui::Color) -> Element {
     )
 }
 
-fn heading(title: &str, palette: &Palette) -> Element {
+pub(crate) fn heading(title: &str, palette: &Palette) -> Element {
     Element::view(
         ViewProps {
             height: Dimension::Cells(1),
@@ -191,7 +194,7 @@ fn heading(title: &str, palette: &Palette) -> Element {
     )
 }
 
-fn header(read_label: &str, write_label: &str, palette: &Palette) -> Element {
+pub(crate) fn header(read_label: &str, write_label: &str, palette: &Palette) -> Element {
     Element::view(
         ViewProps {
             flex_direction: FlexDirection::Row,
@@ -227,7 +230,7 @@ fn header(read_label: &str, write_label: &str, palette: &Palette) -> Element {
     )
 }
 
-fn device_row(rate: &IoRate, palette: &Palette) -> Element {
+pub(crate) fn device_row(rate: &IoRate, palette: &Palette) -> Element {
     let total = (rate.read_per_sec + rate.write_per_sec) as f32 / FULL_SCALE;
     Element::view(
         ViewProps {
@@ -268,7 +271,7 @@ fn device_row(rate: &IoRate, palette: &Palette) -> Element {
     )
 }
 
-fn per_second(bytes: u64) -> String {
+pub(crate) fn per_second(bytes: u64) -> String {
     format!("{}/s", format::bytes(bytes))
 }
 

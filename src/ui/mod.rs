@@ -5,6 +5,7 @@ pub mod detail;
 pub mod help;
 pub mod io;
 pub mod meters;
+pub mod network;
 pub mod overlay;
 pub mod palette;
 pub mod sensors;

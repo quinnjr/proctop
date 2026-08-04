@@ -31,7 +31,7 @@ committing.
 ## Commands
 
 ```bash
-cargo test                                   # everything (270 tests)
+cargo test                                   # everything (293 tests)
 cargo test --test keymap                     # one integration test file
 cargo test --test keymap a_single_d_opens    # one test by (partial) name
 cargo test --lib                             # unit tests inside src/
@@ -149,9 +149,15 @@ Most of these are here because something already went wrong.
   bulk of the table reshuffles every refresh. A NaN percentage sorts as zero
   (`partial_cmp` reports incomparable; `total_cmp` floats NaN above
   infinity).
-- **Sensors are read only while their tab is showing**, at most every 2s.
-  The ~80 `hwmon` inputs on a desktop cost more to read than the whole rest
-  of a sample, because many are real SMBus I/O.
+- **Sensors and sockets are read only while their own tab is showing**, at
+  most every 2s, and `Sampler::sample` takes a `Wanted` saying which.
+  Sensors are ~80 `hwmon` inputs, many of them real SMBus I/O; socket
+  attribution walks every readable `/proc/<pid>/fd`. Each costs more than
+  the whole rest of a sample.
+- **`/proc/net` addresses are little-endian, and IPv6 is four little-endian
+  *words*** — not one 128-bit little-endian value. `::1` is stored as
+  `00000000000000000000000001000000`; reversing all sixteen bytes gives the
+  wrong address.
 
 ## Conventions
 

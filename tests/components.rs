@@ -275,7 +275,7 @@ fn a_terminal_too_narrow_for_one_meter_column_still_reports_a_sane_height() {
 
 use ntui::Shared as NShared;
 use rtop::model::{IoRate, Sensor, SensorKind};
-use rtop::ui::io::{IoView, IoViewProps};
+use rtop::ui::io::{DiskView, DiskViewProps};
 use rtop::ui::sensors::{SensorView, SensorViewProps};
 
 fn count_rows(el: ntui::Element) -> usize {
@@ -337,10 +337,10 @@ fn io_sample(disks: usize, nets: usize) -> Sample {
 }
 
 #[test]
-fn the_io_view_fits_its_row_budget() {
+fn the_disk_view_fits_its_row_budget() {
     for height in [1u16, 2, 4, 6, 10, 20] {
         for (disks, nets) in [(0, 0), (1, 8), (8, 1), (20, 20)] {
-            let rows = count_rows(render_once::<IoView>(&IoViewProps {
+            let rows = count_rows(render_once::<DiskView>(&DiskViewProps {
                 sample: Shared::new(io_sample(disks, nets)),
                 palette: Palette::default(),
                 height,
@@ -354,9 +354,9 @@ fn the_io_view_fits_its_row_budget() {
 }
 
 #[test]
-fn the_io_view_gives_a_busy_list_the_room_a_quiet_one_does_not_need() {
+fn the_disk_view_gives_its_whole_budget_to_the_list() {
     // A fixed 50/50 split left half the tab blank while hiding interfaces.
-    let one_disk_many_nets = render_once::<IoView>(&IoViewProps {
+    let one_disk_many_nets = render_once::<DiskView>(&DiskViewProps {
         sample: Shared::new(io_sample(1, 8)),
         palette: Palette::default(),
         height: 12,
@@ -381,7 +381,7 @@ fn an_unreadable_counter_file_reads_as_unavailable_not_as_idle() {
     let t = TestTerminal::new(
         60,
         20,
-        element!(IoView(
+        element!(DiskView(
             sample: Shared::new(sample),
             palette: Palette::default(),
             height: 20u16,

@@ -144,22 +144,47 @@ async fn opens_and_closes_the_help_overlay() {
 }
 
 #[tokio::test]
-async fn switches_to_the_io_tab() {
+async fn switches_to_the_disk_tab() {
     let mut t = sampled().await;
 
     t.send_key(KeyCode::Char('2')).expect("should accept input");
 
     let text = t.frame_text();
     assert!(text.contains("Disks"), "{text}");
-    assert!(text.contains("Network"), "{text}");
     assert!(text.contains("DEVICE"), "{text}");
+    // Network throughput moved to its own tab.
+    assert!(!text.contains("Interfaces"), "{text}");
+}
+
+#[tokio::test]
+async fn switches_to_the_network_tab() {
+    let mut t = sampled().await;
+
+    t.send_key(KeyCode::Char('3')).expect("should accept input");
+
+    // Sockets are read only while this tab shows, so the first frame after
+    // the switch has none yet.
+    let text = tick_until(&mut t, |text| text.contains("PROTO")).await;
+
+    assert!(text.contains("Interfaces"), "throughput section:\n{text}");
+    assert!(text.contains("Listening"), "socket section:\n{text}");
+    assert!(text.contains("LOCAL ADDRESS"), "{text}");
+}
+
+#[tokio::test]
+async fn does_not_read_sockets_while_another_tab_is_showing() {
+    // Attribution walks every readable /proc/<pid>/fd; paying that for a
+    // tab nobody has open is what the gate exists to prevent.
+    let t = sampled().await;
+
+    assert!(!t.frame_text().contains("LOCAL ADDRESS"));
 }
 
 #[tokio::test]
 async fn switches_to_the_sensors_tab() {
     let mut t = sampled().await;
 
-    t.send_key(KeyCode::Char('3')).expect("should accept input");
+    t.send_key(KeyCode::Char('4')).expect("should accept input");
 
     // Hardware readings are only taken while this tab is showing, so the
     // frame immediately after the switch says so rather than claiming the

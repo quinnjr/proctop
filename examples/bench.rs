@@ -7,6 +7,7 @@
 //! Run with `cargo run --release --example bench` — a debug build measures
 //! the wrong thing by a wide margin.
 
+use rtop::sampler::Wanted;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
@@ -19,13 +20,13 @@ fn main() {
 
     // The first sample has no previous reading to diff against and does not
     // represent steady-state cost.
-    let warmup = sampler.sample(false);
+    let warmup = sampler.sample(Wanted::default());
     let processes = warmup.procs.len();
 
     let mut total = Duration::ZERO;
     for _ in 0..ITERATIONS {
         let started = Instant::now();
-        black_box(sampler.sample(false));
+        black_box(sampler.sample(Wanted::default()));
         total += started.elapsed();
     }
 

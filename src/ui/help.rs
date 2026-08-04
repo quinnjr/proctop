@@ -16,7 +16,7 @@ pub const BINDINGS: &[(&str, &str)] = &[
     ("^d / ^u", "half page down / up"),
     ("PgDn / PgUp", "full page down / up"),
     ("", "View"),
-    ("Tab / ⇧Tab, 1-3", "switch tab"),
+    ("Tab / ⇧Tab, 1-4", "switch tab"),
     ("< / >", "previous / next sort column"),
     ("I", "reverse the sort direction"),
     ("t", "tree view"),
@@ -58,7 +58,7 @@ pub fn is_documented_key(key: &str) -> bool {
     const BOUND: &[&str] = &[
         // movement
         "j", "k", "↓", "↑", "g", "G", "Home", "End", "^d", "^u", "PgDn", "PgUp", // view
-        "Tab", "⇧Tab", "1-3", "<", ">", "I", "t", "H", "u", // act
+        "Tab", "⇧Tab", "1-4", "<", ">", "I", "t", "H", "u", // act
         "Enter", "dd", "n", // find
         "any", "key", // leave
         "q", "Esc", "?",

@@ -13,13 +13,14 @@ use crate::actions;
 use crate::config::Config;
 use crate::filter::{self, Filter};
 use crate::model::{ProcRow, Sample};
-use crate::sampler::Sampler;
+use crate::sampler::{Sampler, Wanted};
 use crate::sort::{SortKey, sort_procs};
 use crate::tree;
 use crate::ui::detail::{Detail, DetailProps, Kill, KillProps, Renice, ReniceProps};
 use crate::ui::help::{Help, HelpProps};
-use crate::ui::io::{IoView, IoViewProps};
+use crate::ui::io::{DiskView, DiskViewProps};
 use crate::ui::meters::{Meters, MetersProps};
+use crate::ui::network::{NetworkView, NetworkViewProps};
 use crate::ui::palette::Palette;
 use crate::ui::sensors::{SensorView, SensorViewProps};
 use crate::ui::state::{Effect, Mode, Overlay, Tab, UiState, handle_key};
@@ -71,20 +72,26 @@ impl Component for App {
         // immediately — so holding Tab down sampled far faster than
         // `refresh_ms`. Whether to read sensors is a parameter of a sample,
         // not a reason to tear the loop down.
-        let sensors_wanted = hooks.use_state(|| Arc::new(AtomicBool::new(false)));
+        let want_sensors = hooks.use_state(|| Arc::new(AtomicBool::new(false)));
+        let want_sockets = hooks.use_state(|| Arc::new(AtomicBool::new(false)));
         // Written, not `set`: this must not itself schedule a render.
-        sensors_wanted
+        let tab = ui.get().tab;
+        want_sensors
             .get()
-            .store(ui.get().tab == Tab::Sensors, Ordering::Relaxed);
+            .store(tab == Tab::Sensors, Ordering::Relaxed);
+        want_sockets
+            .get()
+            .store(tab == Tab::Network, Ordering::Relaxed);
 
         {
-            let (sink, sampler, wanted) = (sample.clone(), sampler.get(), sensors_wanted.get());
+            let (sink, sampler) = (sample.clone(), sampler.get());
+            let (sensors, sockets) = (want_sensors.get(), want_sockets.get());
             let refresh = Duration::from_millis(props.config.refresh_ms);
             hooks.use_future(move || async move {
                 loop {
                     let sink = sink.clone();
                     let sampler = sampler.clone();
-                    let wanted = wanted.clone();
+                    let (sensors, sockets) = (sensors.clone(), sockets.clone());
                     // /proc reads are blocking syscalls across hundreds of
                     // files; on the render thread they would stall input for
                     // the duration of every sample.
@@ -92,7 +99,10 @@ impl Component for App {
                         sampler
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .sample(wanted.load(Ordering::Relaxed))
+                            .sample(Wanted {
+                                sensors: sensors.load(Ordering::Relaxed),
+                                sockets: sockets.load(Ordering::Relaxed),
+                            })
                     })
                     .await;
                     if let Ok(taken) = taken {
@@ -202,10 +212,16 @@ impl Component for App {
                     sort: state.sort,
                     palette: palette,
                 )),
-                Tab::Io => element!(IoView(
+                Tab::Disk => element!(DiskView(
                     sample: current.clone(),
                     palette: palette,
                     height: body_rows,
+                )),
+                Tab::Network => element!(NetworkView(
+                    sample: current.clone(),
+                    palette: palette,
+                    height: body_rows,
+                    selection: cursor,
                 )),
                 Tab::Sensors => element!(SensorView(
                     sample: current.clone(),
