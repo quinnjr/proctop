@@ -10,7 +10,8 @@ performance gaps a counter example never will. Every one it finds is
 recorded in [the design doc](docs/superpowers/specs/2026-08-04-rtop-design.md).
 
 Linux only. rtop reads `/proc` and `/sys` directly, with no portability
-layer.
+layer. Needs [`ntui`](https://crates.io/crates/ntui) 0.3, which carries the
+APIs this project's dogfooding produced.
 
 ```
 cargo run --release

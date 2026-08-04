@@ -9,9 +9,7 @@ repository = "https://github.com/quinnjr/rtop"
 [dependencies]
 clap = { version = "4.6.5", features = ["derive"] }
 libc = "0.2.189"
-# Path for local development against the in-tree ntui; the version is what
-# a published build resolves against.
-ntui = { version = "0.2", path = "../ntui/ntui" }
+ntui = "0.3"
 procfs = "0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1", features = ["rt", "macros", "time"] }
