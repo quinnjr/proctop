@@ -162,3 +162,35 @@ fn keeps_every_fraction_within_zero_and_one() {
         assert!((0.0..=1.0).contains(&v), "{name} out of range: {v}");
     }
 }
+
+// ---------- refresh pacing ----------
+
+use rtop::delta::should_refresh;
+use std::time::{Duration, Instant};
+
+#[test]
+fn refreshes_when_nothing_has_been_read_yet() {
+    assert!(should_refresh(None, Instant::now(), Duration::from_secs(2)));
+}
+
+#[test]
+fn does_not_refresh_again_within_the_interval() {
+    let now = Instant::now();
+
+    assert!(!should_refresh(Some(now), now, Duration::from_secs(2)));
+}
+
+#[test]
+fn refreshes_once_the_interval_has_elapsed() {
+    let now = Instant::now();
+    let earlier = now - Duration::from_secs(3);
+
+    assert!(should_refresh(Some(earlier), now, Duration::from_secs(2)));
+}
+
+#[test]
+fn treats_a_zero_interval_as_every_time() {
+    let now = Instant::now();
+
+    assert!(should_refresh(Some(now), now, Duration::ZERO));
+}

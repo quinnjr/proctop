@@ -3,10 +3,16 @@
 use std::sync::Arc;
 
 pub mod app;
+pub mod detail;
+pub mod help;
+pub mod io;
 pub mod meters;
+pub mod overlay;
+pub mod palette;
 pub mod selection;
+pub mod sensors;
+pub mod state;
 pub mod table;
-pub mod theme;
 
 /// A prop payload compared by pointer rather than by value.
 ///

@@ -42,6 +42,62 @@ impl CpuUsage {
     }
 }
 
+/// Bytes-per-second for each device present in `cur`.
+///
+/// A device with no previous reading reports zero rather than its lifetime
+/// total — drives get plugged in and interfaces come up mid-session, and
+/// their first frame is not a burst of throughput. Counters that went
+/// backwards (an interface brought down and back up) report zero for the
+/// same reason they do elsewhere, and a zero-length interval reports zero
+/// rather than dividing by it.
+pub fn io_rates<T: crate::model::Counters>(
+    prev: &[T],
+    cur: &[T],
+    elapsed: std::time::Duration,
+) -> Vec<crate::model::IoRate> {
+    let seconds = elapsed.as_secs_f64();
+    let previous: std::collections::HashMap<&str, (u64, u64)> = prev
+        .iter()
+        .map(|d| (d.name(), (d.read_bytes(), d.write_bytes())))
+        .collect();
+
+    cur.iter()
+        .map(|device| {
+            let (read, write) = match previous.get(device.name()) {
+                Some(&(read, write)) if seconds > 0.0 => (
+                    per_second(device.read_bytes().saturating_sub(read), seconds),
+                    per_second(device.write_bytes().saturating_sub(write), seconds),
+                ),
+                _ => (0, 0),
+            };
+            crate::model::IoRate {
+                name: device.name().to_string(),
+                read_per_sec: read,
+                write_per_sec: write,
+            }
+        })
+        .collect()
+}
+
+fn per_second(bytes: u64, seconds: f64) -> u64 {
+    (bytes as f64 / seconds) as u64
+}
+
+/// Whether a subsystem read at `last` is due again by `now`.
+///
+/// Used to pace readings that are far more expensive than the rest of a
+/// sample, or that change far more slowly. A zero interval means every time.
+pub fn should_refresh(
+    last: Option<std::time::Instant>,
+    now: std::time::Instant,
+    interval: std::time::Duration,
+) -> bool {
+    match last {
+        None => true,
+        Some(last) => now.duration_since(last) >= interval,
+    }
+}
+
 /// Total jiffies elapsed across all cores between two readings of the
 /// aggregate `/proc/stat` line — the denominator for per-process usage.
 pub fn total_jiffies(prev: &CpuTimes, cur: &CpuTimes) -> u64 {

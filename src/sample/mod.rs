@@ -5,7 +5,10 @@
 //! layer that reads the file lives alongside each parser.
 
 pub mod cpu;
+pub mod disk;
 pub mod memory;
+pub mod net;
 pub mod process;
+pub mod sensors;
 pub mod system;
 pub mod users;

@@ -1,0 +1,27 @@
+# No color beyond bright and dim — for terminals where the palette is
+# already spoken for, or where color carries no meaning.
+
+cpu_user   = "white"
+cpu_system = "white"
+cpu_nice   = "darkgrey"
+cpu_irq    = "darkgrey"
+cpu_iowait = "darkgrey"
+
+mem_used  = "white"
+mem_cache = "darkgrey"
+swap      = "white"
+
+label     = "white"
+header_fg = "black"
+header_bg = "white"
+muted     = "darkgrey"
+text      = "reset"
+
+selected_fg = "black"
+selected_bg = "white"
+status_bg   = "darkgrey"
+
+warn  = "white"
+alert = "white"
+
+panel_bg = "black"

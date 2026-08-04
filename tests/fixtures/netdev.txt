@@ -1,0 +1,16 @@
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 113396770  221765    0    0    0     0          0         0 113396770  221765    0    0    0     0       0          0
+  eno1: 155135943  527809    3    0    0     0          0      7349 1356938322 1021695    0   40    0     0       0          0
+  eno2:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+wlp0s20f3:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+br-lexmata-app:  105906    1988    0    0    0     0          0         0   151087    2094    0   11    0     0       0          0
+br-c9853e0df472:       0       0    0    0    0     0          0         0        0       0    0   14    0     0       0          0
+docker0:   16046     144    0    0    0     0          0         0    79430     521    0   12    0     0       0          0
+vethe260689:     126       3    0    0    0     0          0         0    93492     918    0    0    0     0       0          0
+vethbe58be2:     126       3    0    0    0     0          0         0    91978     912    0    0    0     0       0          0
+vethb4f3ccf:     126       3    0    0    0     0          0         0    91936     911    0    0    0     0       0          0
+veth07c4e45:     126       3    0    0    0     0          0         0    77839     572    0    0    0     0       0          0
+vethaebb577:     126       3    0    0    0     0          0         0    91922     910    0    0    0     0       0          0
+veth920fa09:   18365     262    0    0    0     0          0         0    86550    1019    0    0    0     0       0          0
+veth7ceab40:     654      11    0    0    0     0          0         0    11763      33    0    0    0     0       0          0

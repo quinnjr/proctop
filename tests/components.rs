@@ -3,8 +3,8 @@ use ntui::testing::TestTerminal;
 use rtop::model::{MemInfo, Proc, ProcRow, Sample};
 use rtop::sort::SortKey;
 use rtop::ui::Shared;
-use rtop::ui::meters::Meters;
-use rtop::ui::meters::MetersProps;
+use rtop::ui::meters::{Meters, MetersProps};
+use rtop::ui::palette::Palette;
 use rtop::ui::selection::Selection;
 use rtop::ui::table::{ProcessTable, ProcessTableProps};
 
@@ -21,6 +21,7 @@ fn rows(n: usize) -> Vec<ProcRow> {
             cpu: 0.0,
             mem: 0.01,
             user: String::from("joseph"),
+            depth: 0,
         })
         .collect()
 }
@@ -34,6 +35,7 @@ fn table(rows: Vec<ProcRow>, selection: Selection, height: u16) -> TestTerminal 
             selection: selection,
             height: height,
             sort: SortKey::Cpu,
+            palette: Palette::default(),
         )),
     )
     .expect("should render")
@@ -75,6 +77,7 @@ fn builds_only_the_rows_that_are_visible() {
         selection: Selection::default(),
         height: 5,
         sort: SortKey::Cpu,
+        palette: Palette::default(),
     });
 
     let ntui::Node::View { children, .. } = built.node else {
@@ -146,8 +149,12 @@ fn sample() -> Sample {
 
 #[test]
 fn renders_a_meter_for_every_core() {
-    let t = TestTerminal::new(100, 20, element!(Meters(sample: Shared::new(sample()))))
-        .expect("should render");
+    let t = TestTerminal::new(
+        100,
+        20,
+        element!(Meters(sample: Shared::new(sample()), palette: Palette::default())),
+    )
+    .expect("should render");
     let text = t.frame_text();
 
     for core in 0..4 {
@@ -159,8 +166,12 @@ fn renders_a_meter_for_every_core() {
 
 #[test]
 fn renders_the_summary_line() {
-    let t = TestTerminal::new(100, 20, element!(Meters(sample: Shared::new(sample()))))
-        .expect("should render");
+    let t = TestTerminal::new(
+        100,
+        20,
+        element!(Meters(sample: Shared::new(sample()), palette: Palette::default())),
+    )
+    .expect("should render");
     let text = t.frame_text();
 
     assert!(text.contains("01:01:01"), "missing uptime:\n{text}");
@@ -174,8 +185,12 @@ fn renders_meters_on_a_machine_with_no_swap() {
     s.mem.swap_total = 0;
     s.mem.swap_free = 0;
 
-    let t = TestTerminal::new(100, 20, element!(Meters(sample: Shared::new(s))))
-        .expect("should render");
+    let t = TestTerminal::new(
+        100,
+        20,
+        element!(Meters(sample: Shared::new(s), palette: Palette::default())),
+    )
+    .expect("should render");
 
     assert!(t.frame_text().contains("Swp"));
 }

@@ -1,32 +1,37 @@
-//! The root component: owns the sampling loop, the selection, and the
-//! keybindings.
+//! The root component: owns the sampling loop, the UI state, and the wiring
+//! between the keymap's decisions and the world.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ntui::props::{Dimension, FlexDirection, TextWrap};
+use ntui::props::{Dimension, FlexDirection, TextProps, TextWrap, ViewProps};
 use ntui::style::{Color, Weight};
-use ntui::{Component, Element, Hooks, KeyCode, element};
+use ntui::{Component, Element, Hooks, element};
 
-use crate::model::Sample;
+use crate::actions;
+use crate::config::Config;
+use crate::filter::{self, Filter};
+use crate::model::{ProcRow, Sample};
 use crate::sampler::Sampler;
 use crate::sort::{SortKey, sort_procs};
+use crate::tree;
+use crate::ui::detail::{Detail, DetailProps, Kill, KillProps, Renice, ReniceProps};
+use crate::ui::help::{Help, HelpProps};
+use crate::ui::io::{IoView, IoViewProps};
 use crate::ui::meters::{Meters, MetersProps};
-use crate::ui::selection::Selection;
-use crate::ui::table::{ProcessTable, ProcessTableProps};
-use crate::ui::{Shared, meters, theme};
+use crate::ui::palette::Palette;
+use crate::ui::sensors::{SensorView, SensorViewProps};
+use crate::ui::state::{Effect, Mode, Overlay, Tab, UiState, handle_key};
+use crate::ui::table::{ProcessTable, ProcessTableProps, cell};
+use crate::ui::{Shared, meters};
 
-/// How often the machine is re-sampled. htop's default, and slow enough that
-/// the sampler's own cost stays invisible.
-const REFRESH: Duration = Duration::from_millis(1500);
-
-/// Rows the table gives up to chrome: the column header and the status bar.
+/// Rows the body gives up to chrome: the tab bar and the status bar.
 const CHROME_ROWS: u16 = 2;
 
 #[derive(Clone, PartialEq, Default)]
 pub struct AppProps {
-    /// Column to sort by on startup.
-    pub sort: SortKey,
+    pub config: Config,
+    pub palette: Palette,
 }
 
 pub struct App;
@@ -36,159 +41,268 @@ impl Component for App {
 
     fn render(props: &AppProps, hooks: &mut Hooks) -> Element {
         let sample = hooks.use_state(Shared::<Sample>::default);
-        let selection = hooks.use_state(Selection::default);
-        let sort = hooks.use_state(|| props.sort);
-        let descending = hooks.use_state(|| true);
-        let (_, terminal_rows) = hooks.use_terminal_size();
+        let ui = hooks.use_state(|| UiState {
+            sort: props.config.processes.sort_by,
+            descending: props.config.processes.sort_desc,
+            tree_view: props.config.tree_view,
+            filter: Filter {
+                hide_kernel_threads: props.config.hide_kernel_threads,
+                ..Filter::default()
+            },
+            ..UiState::default()
+        });
+        let (terminal_cols, terminal_rows) = hooks.use_terminal_size();
         let app = hooks.use_app();
 
         // The sampler is retained across ticks because rates are derived by
         // diffing against its previous reading.
         let sampler = hooks.use_state(|| Arc::new(Mutex::new(Sampler::new())));
 
+        // Sensors are only read while their tab is showing; see
+        // `Sampler::sensors` for why. Keyed on the tab so switching to it
+        // restarts the loop and the readings appear on the next tick rather
+        // than at the next refresh.
+        let showing_sensors = ui.get().tab == Tab::Sensors;
         {
             let (sink, sampler) = (sample.clone(), sampler.get());
-            hooks.use_future(move || async move {
+            let refresh = Duration::from_millis(props.config.refresh_ms);
+            hooks.use_task(showing_sensors, move || async move {
                 loop {
                     let sink = sink.clone();
                     let sampler = sampler.clone();
                     // /proc reads are blocking syscalls across hundreds of
-                    // files; running them on the render thread would stall
-                    // input for the duration of every sample.
+                    // files; on the render thread they would stall input for
+                    // the duration of every sample.
                     let taken = tokio::task::spawn_blocking(move || {
                         sampler
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .sample()
+                            .sample(showing_sensors)
                     })
                     .await;
                     if let Ok(taken) = taken {
                         sink.set(Shared::new(taken));
                     }
-                    tokio::time::sleep(REFRESH).await;
+                    tokio::time::sleep(refresh).await;
                 }
             });
         }
 
         let current = sample.get();
-        let header_rows = meters::height(current.cores.len());
-        let table_rows = terminal_rows
+        let state = ui.get();
+        let palette = props.palette;
+
+        let header_rows = meters::height(current.cores.len(), terminal_cols);
+        let body_rows = terminal_rows
             .saturating_sub(header_rows)
             .saturating_sub(CHROME_ROWS);
 
-        let mut rows = current.procs.clone();
-        sort_procs(&mut rows, sort.get(), descending.get());
+        // The table spends one of its rows on its own column header, so it
+        // can only show one fewer process than the body has room for.
+        // Without this the status bar is pushed off the bottom of the
+        // screen, since the table's flex_grow lets it take the space.
+        let table_rows = body_rows.saturating_sub(1);
 
-        // Processes exit between samples, so a selection that was valid a
+        let rows = Shared::new(visible_rows(&current, &state));
+
+        // Processes exit between samples, so a cursor that was valid a
         // moment ago can now point past the end of the list.
-        let mut cursor = selection.get();
+        let mut cursor = state.selection;
         cursor.clamp(rows.len(), table_rows as usize);
-        if cursor != selection.get() {
-            selection.set(cursor);
-        }
 
         {
-            let (selection, sort, descending) =
-                (selection.clone(), sort.clone(), descending.clone());
-            let len = rows.len();
+            let (ui, rows) = (ui.clone(), rows.clone());
             let height = table_rows as usize;
             hooks.use_input(move |ev, _| {
-                let page = height.max(1) as isize;
-                match ev.code {
-                    KeyCode::Char('q') | KeyCode::Esc => app.exit(),
+                let mut next = ui.get();
+                next.selection = cursor;
+                let effect = handle_key(&mut next, ev, &rows, height);
 
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        selection.update(|s| s.move_by(1, len, height))
+                match effect {
+                    Effect::None => {}
+                    Effect::Quit => app.exit(),
+                    // Signals and renices are performed here rather than in
+                    // the keymap so that the keymap stays a pure function.
+                    Effect::Kill { pid, signal } => {
+                        next.notice = Some(match actions::kill(pid, signal) {
+                            Ok(()) => format!("sent {} to {pid}", signal.label()),
+                            Err(e) => format!("{} to {pid}: {e}", signal.label()),
+                        });
                     }
-                    KeyCode::Char('k') | KeyCode::Up => {
-                        selection.update(|s| s.move_by(-1, len, height))
+                    Effect::Renice { pid, nice } => {
+                        next.notice = Some(match actions::renice(pid, nice) {
+                            Ok(()) => format!("reniced {pid} to {nice}"),
+                            Err(e) => format!("renice {pid}: {e}"),
+                        });
                     }
-                    // Ctrl-modified rather than bare d/u: `d` is reserved
-                    // for `dd` (kill), and `u` for filter-by-user.
-                    KeyCode::Char('d') if ctrl(&ev) => {
-                        selection.update(|s| s.move_by(page / 2, len, height))
-                    }
-                    KeyCode::Char('u') if ctrl(&ev) => {
-                        selection.update(|s| s.move_by(-page / 2, len, height))
-                    }
-                    KeyCode::PageDown => selection.update(|s| s.move_by(page, len, height)),
-                    KeyCode::PageUp => selection.update(|s| s.move_by(-page, len, height)),
-                    KeyCode::Char('g') | KeyCode::Home => selection.update(Selection::to_top),
-                    KeyCode::Char('G') | KeyCode::End => {
-                        selection.update(|s| s.to_bottom(len, height))
-                    }
-
-                    // Re-sorting moves rows out from under the cursor, so
-                    // the view returns to the top rather than landing the
-                    // user somewhere arbitrary.
-                    KeyCode::Char('<') => {
-                        sort.update(|s| *s = previous_sort(*s));
-                        selection.update(Selection::to_top);
-                    }
-                    KeyCode::Char('>') => {
-                        sort.update(|s| *s = next_sort(*s));
-                        selection.update(Selection::to_top);
-                    }
-                    KeyCode::Char('I') => {
-                        descending.update(|d| *d = !*d);
-                        selection.update(Selection::to_top);
-                    }
-                    _ => {}
                 }
+                ui.set(next);
             });
         }
 
-        let status = format!(
-            " {} sorted by {} {} · j/k move · ^d/^u page · g/G ends · < > sort · I reverse · q quit",
-            rows.len(),
-            sort_name(sort.get()),
-            if descending.get() { "desc" } else { "asc" },
-        );
+        let body = match state.tab {
+            Tab::Processes => element!(ProcessTable(
+                rows: rows.clone(),
+                selection: cursor,
+                height: table_rows,
+                sort: state.sort,
+                palette: palette,
+            )),
+            Tab::Io => element!(IoView(
+                sample: current.clone(),
+                palette: palette,
+                height: body_rows,
+            )),
+            Tab::Sensors => element!(SensorView(
+                sample: current.clone(),
+                palette: palette,
+                height: body_rows,
+            )),
+        };
 
-        element! {
-            View(flex_direction: FlexDirection::Column, height: Dimension::Percent(1.0)) {
-                Meters(sample: current.clone())
-                ProcessTable(
-                    rows: Shared::new(rows),
-                    selection: cursor,
-                    height: table_rows,
-                    sort: sort.get(),
-                )
-                View(height: Dimension::Cells(1), background: Color::Blue) {
-                    Text(
-                        content: status,
-                        color: theme::SELECTED_FG,
-                        weight: Weight::Bold,
-                        wrap: TextWrap::Truncate,
-                    )
-                }
-            }
+        let mut children = vec![
+            element!(Meters(sample: current.clone(), palette: palette, width: terminal_cols)),
+            tab_bar(&state, &palette),
+            body,
+            status_bar(&state, rows.len(), &palette),
+        ];
+
+        if let Some(overlay) = overlay_element(&state, &current.procs, &palette) {
+            children.push(overlay);
         }
+
+        Element::view(
+            ViewProps {
+                flex_direction: FlexDirection::Column,
+                height: Dimension::Percent(1.0),
+                ..Default::default()
+            },
+            children,
+        )
     }
 }
 
-fn ctrl(ev: &ntui::KeyEvent) -> bool {
-    ev.modifiers.contains(ntui::KeyModifiers::CONTROL)
+/// The process list as the table should show it: filtered, sorted, and — in
+/// tree view — nested.
+///
+/// Filtering comes before sorting because sorting is the expensive step and
+/// there is no reason to order rows about to be discarded.
+pub fn visible_rows(sample: &Sample, state: &UiState) -> Vec<ProcRow> {
+    let mut rows = filter::apply(sample.procs.clone(), &state.filter);
+    sort_procs(&mut rows, state.sort, state.descending);
+    if state.tree_view {
+        rows = tree::flatten(rows);
+    }
+    rows
 }
 
-const SORT_ORDER: [SortKey; 5] = [
-    SortKey::Pid,
-    SortKey::Name,
-    SortKey::Cpu,
-    SortKey::Memory,
-    SortKey::Time,
-];
-
-fn next_sort(current: SortKey) -> SortKey {
-    let i = SORT_ORDER.iter().position(|k| *k == current).unwrap_or(0);
-    SORT_ORDER[(i + 1) % SORT_ORDER.len()]
+fn overlay_element(state: &UiState, procs: &[ProcRow], palette: &Palette) -> Option<Element> {
+    match &state.overlay {
+        Overlay::None => None,
+        Overlay::Help => Some(element!(Help(palette: *palette))),
+        Overlay::Detail { pid } => Some(element!(Detail(
+            // Looked up fresh each frame so the pane keeps updating, and
+            // says so rather than freezing if the process exits.
+            row: procs.iter().find(|r| r.proc.pid == *pid).cloned(),
+            pid: *pid,
+            palette: *palette,
+        ))),
+        Overlay::Kill { pid, name, index } => Some(element!(Kill(
+            pid: *pid,
+            name: name.clone(),
+            index: *index,
+            palette: *palette,
+        ))),
+        Overlay::Renice { pid, name, input } => Some(element!(Renice(
+            pid: *pid,
+            name: name.clone(),
+            input: input.clone(),
+            palette: *palette,
+        ))),
+    }
 }
 
-fn previous_sort(current: SortKey) -> SortKey {
-    let i = SORT_ORDER.iter().position(|k| *k == current).unwrap_or(0);
-    SORT_ORDER[(i + SORT_ORDER.len() - 1) % SORT_ORDER.len()]
+fn tab_bar(state: &UiState, palette: &Palette) -> Element {
+    let tabs: Vec<Element> = Tab::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, tab)| {
+            let active = *tab == state.tab;
+            let label = format!(" {}:{} ", i + 1, tab.label());
+            let width = label.chars().count() as u16;
+            cell(
+                &label,
+                width,
+                if active {
+                    palette.selected_fg
+                } else {
+                    palette.muted
+                },
+                if active { Weight::Bold } else { Weight::Normal },
+                if active {
+                    palette.selected_bg
+                } else {
+                    Color::Reset
+                },
+            )
+        })
+        .collect();
+
+    Element::view(
+        ViewProps {
+            flex_direction: FlexDirection::Row,
+            gap: 1,
+            height: Dimension::Cells(1),
+            ..Default::default()
+        },
+        tabs,
+    )
 }
 
+fn status_bar(state: &UiState, count: usize, palette: &Palette) -> Element {
+    // A prompt or a notice displaces the usual hints: what the user is doing
+    // right now matters more than the key list.
+    let (content, background) = match (&state.mode, &state.notice) {
+        (Mode::Search(query), _) => (format!(" /{query}_"), palette.selected_bg),
+        (Mode::Command(buffer), _) => (format!(" :{buffer}_"), palette.selected_bg),
+        (Mode::Normal, Some(notice)) => (format!(" {notice}"), palette.alert),
+        (Mode::Normal, None) => (
+            format!(
+                " {count} procs{}{}{} · {} {} · ? keys · q quit",
+                if state.filter.query.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · /{}", state.filter.query)
+                },
+                match &state.filter.user {
+                    Some(user) => format!(" · user {user}"),
+                    None => String::new(),
+                },
+                if state.tree_view { " · tree" } else { "" },
+                sort_name(state.sort),
+                if state.descending { "desc" } else { "asc" },
+            ),
+            palette.status_bg,
+        ),
+    };
+
+    Element::view(
+        ViewProps {
+            height: Dimension::Cells(1),
+            background,
+            ..Default::default()
+        },
+        vec![Element::text(TextProps {
+            content,
+            color: palette.selected_fg,
+            weight: Weight::Bold,
+            wrap: TextWrap::Truncate,
+            ..Default::default()
+        })],
+    )
+}
+
+/// The column name shown in the status bar.
 pub fn sort_name(key: SortKey) -> &'static str {
     match key {
         SortKey::Pid => "PID",

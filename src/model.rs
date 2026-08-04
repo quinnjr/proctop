@@ -135,6 +135,99 @@ impl Proc {
     }
 }
 
+/// What a [`Sensor`]'s value measures, and therefore how to render it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SensorKind {
+    /// Degrees Celsius.
+    #[default]
+    Temperature,
+    /// Revolutions per minute.
+    Fan,
+    /// Percent charge remaining.
+    Battery,
+}
+
+/// One hardware reading.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sensor {
+    /// The hwmon chip or power-supply device it came from. `Core 0` is
+    /// meaningless without knowing whether `coretemp` or a motherboard chip
+    /// inventing its own names produced it.
+    pub chip: String,
+    pub label: String,
+    pub kind: SensorKind,
+    pub value: f32,
+}
+
+/// One device's cumulative counters from `/proc/diskstats`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiskStat {
+    pub name: String,
+    pub reads: u64,
+    pub writes: u64,
+    /// Sectors, which `/proc/diskstats` fixes at 512 bytes regardless of the
+    /// device's real block size.
+    pub sectors_read: u64,
+    pub sectors_written: u64,
+}
+
+/// One interface's cumulative counters from `/proc/net/dev`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NetStat {
+    pub name: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+}
+
+/// Throughput for one disk or interface, in bytes per second.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IoRate {
+    pub name: String,
+    pub read_per_sec: u64,
+    pub write_per_sec: u64,
+}
+
+/// A source of two cumulative byte-ish counters that can be turned into
+/// rates. Implemented for both disks and interfaces so the delta logic —
+/// including the wraparound and zero-interval guards — exists once.
+pub trait Counters {
+    fn name(&self) -> &str;
+    /// Cumulative bytes in the "read" direction.
+    fn read_bytes(&self) -> u64;
+    /// Cumulative bytes in the "write" direction.
+    fn write_bytes(&self) -> u64;
+}
+
+/// `/proc/diskstats` counts sectors, and fixes a sector at 512 bytes here
+/// regardless of the device's actual block size.
+pub const SECTOR_BYTES: u64 = 512;
+
+impl Counters for DiskStat {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn read_bytes(&self) -> u64 {
+        self.sectors_read.saturating_mul(SECTOR_BYTES)
+    }
+    fn write_bytes(&self) -> u64 {
+        self.sectors_written.saturating_mul(SECTOR_BYTES)
+    }
+}
+
+impl Counters for NetStat {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn read_bytes(&self) -> u64 {
+        self.rx_bytes
+    }
+    fn write_bytes(&self) -> u64 {
+        self.tx_bytes
+    }
+}
+
 /// A process plus the figures derived from comparing it against the previous
 /// sample. This is what the table renders.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -147,6 +240,8 @@ pub struct ProcRow {
     /// The owning username, or the bare uid when this machine has no passwd
     /// entry for it — common under containers and directory services.
     pub user: String,
+    /// Nesting depth in the tree view; always 0 in the flat view.
+    pub depth: usize,
 }
 
 /// One complete reading of the machine, with every rate already derived.
@@ -166,6 +261,17 @@ pub struct Sample {
     pub running: usize,
     /// Threads across all processes.
     pub threads: i64,
+    /// Per-device disk throughput.
+    pub disks: Vec<IoRate>,
+    /// Per-interface network throughput.
+    pub nets: Vec<IoRate>,
+    /// Hardware readings, or `None` when they were not read for this
+    /// sample — they are only read while something is displaying them.
+    ///
+    /// `None` and `Some(vec![])` are deliberately different: the first means
+    /// "not read yet", the second "this machine genuinely has none", and the
+    /// sensors view says something different about each.
+    pub sensors: Option<Vec<Sensor>>,
 }
 
 impl MemInfo {

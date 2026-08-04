@@ -1,0 +1,28 @@
+# rtop's default palette: htop's conventions, so muscle memory transfers.
+# Colors are ANSI names or "#rrggbb". Anything omitted keeps its built-in
+# value, so a theme only states what it changes.
+
+cpu_user   = "green"
+cpu_system = "red"
+cpu_nice   = "blue"
+cpu_irq    = "magenta"
+cpu_iowait = "cyan"
+
+mem_used  = "green"
+mem_cache = "yellow"
+swap      = "red"
+
+label     = "cyan"
+header_fg = "black"
+header_bg = "green"
+muted     = "darkgrey"
+text      = "reset"
+
+selected_fg = "black"
+selected_bg = "cyan"
+status_bg   = "blue"
+
+warn  = "yellow"
+alert = "red"
+
+panel_bg = "black"

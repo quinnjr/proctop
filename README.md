@@ -12,16 +12,14 @@ recorded in [the design doc](docs/superpowers/specs/2026-08-04-rtop-design.md).
 Linux only. rtop reads `/proc` and `/sys` directly, with no portability
 layer.
 
-## Status
-
-Phases 1 and 2 of [the plan](docs/superpowers/specs/2026-08-04-rtop-design.md#9-implementation-phases)
-are done: rtop samples the machine and renders meters plus a sortable,
-scrollable process table. Search, kill/renice, the detail pane, the I/O and
-sensors tabs, and config files are not built yet.
-
 ```
 cargo run --release
 ```
+
+Three tabs — processes, I/O, sensors — plus search, a command line, a
+detail pane, kill and renice, tree view, a config file, and themes. All
+seven phases of [the plan](docs/superpowers/specs/2026-08-04-rtop-design.md#9-implementation-phases)
+are built.
 
 ## Keys
 
@@ -31,16 +29,37 @@ cargo run --release
 | `g` / `G`, `Home` / `End` | First / last row |
 | `C-d` / `C-u` | Half page down / up |
 | `PgDn` / `PgUp` | Full page down / up |
+| `Tab`, `1`–`3` | Switch tab |
 | `<` / `>` | Previous / next sort column |
 | `I` | Reverse the sort direction |
-| `q`, `Esc` | Quit |
+| `t` | Tree view |
+| `H` | Hide kernel threads |
+| `u` | Filter to the selected process's user |
+| `Enter` | Process details |
+| `dd` | Kill — asks which signal |
+| `n` | Renice |
+| `/` | Incremental search |
+| `:` | Command line |
+| `?` | Help |
+| `q`, `Esc` | Quit — `Esc` clears an active filter first |
+
+`:sort <col>`, `:filter <text>`, `:user <name>`, `:tree`, `:q`.
+
+`dd` rather than `k` for kill is deliberate: `k` is navigation, and binding
+a destructive action to a navigation key in a list you are actively
+scrolling is a footgun.
 
 ## What it measures
 
-Per-core CPU with the segments broken out, memory and swap, load average,
-uptime, task and thread counts, and per-process PID / user / priority /
-nice / virtual and resident memory / state / CPU% / MEM% / accumulated CPU
-time / command.
+**Processes** — per-core CPU with the segments broken out, memory and swap,
+load average, uptime, task and thread counts, and per-process PID / user /
+priority / nice / virtual and resident memory / state / CPU% / MEM% /
+accumulated CPU time / command.
+
+**I/O** — per-device disk and per-interface network throughput, busiest
+first, with idle devices hidden.
+
+**Sensors** — temperatures, fan speeds, and battery from `hwmon`.
 
 Two corrections in the accounting are worth knowing about, because a naive
 subtract-and-divide gets both wrong:
@@ -53,11 +72,40 @@ subtract-and-divide gets both wrong:
   process's accumulated CPU time to whatever inherits it, producing
   impossible percentages.
 
+## Configuration
+
+`~/.config/rtop/config.toml`, honouring `XDG_CONFIG_HOME`. A missing file
+is fine; a *broken* one is fatal and reported, because a setting that
+silently does nothing is worse than a refusal to start. Unknown keys are
+rejected for the same reason.
+
+```toml
+refresh_ms = 1500
+theme = "gruvbox"          # default, gruvbox, mono
+tree_view = false
+hide_kernel_threads = false
+
+[processes]
+sort_by = "cpu"            # pid, name, cpu, mem, time
+sort_desc = true
+```
+
+Flags (`--refresh`, `--sort`, `--theme`, `--tree`, `-H`, `--config`)
+override the file for one run and are never written back.
+`rtop --show-config-path` prints where it looks.
+
 ## Cost
 
 Sampling runs on `spawn_blocking`, never on the render thread. Measured on
-2026-08-04 with 782 processes, release build: **6.0 ms per sample, a 0.40%
-duty cycle** at the default 1500 ms refresh.
+2026-08-04 with ~790 processes, release build: **7.7–8.4 ms per sample, a
+0.51–0.56% duty cycle** at the default 1500 ms refresh.
+
+Sensors are the exception and are handled specially. This machine exposes
+82 `hwmon` inputs and reading them costs ~30 ms — several times the whole
+rest of a sample — because many are real I/O over SMBus rather than cached
+kernel values. Reading them every tick took the duty cycle to 2.5%. They
+are now read **only while the sensors tab is showing**, and at most every 2
+seconds even then.
 
 Re-measure after touching the sampler:
 
@@ -77,6 +125,13 @@ awkward to produce live — a process named `weird)name`, a kernel that stops
 before the guest columns, a machine with no swap, a counter mid-wraparound.
 Only `tests/sampler.rs` and `tests/app.rs` touch the running machine, and
 they assert on wiring rather than on any particular figure.
+
+The keymap is a pure function — `ui::state::handle_key` takes the UI state
+and a key and returns the next state plus an effect to perform — so every
+mode, overlay, and edge of the process list is tested without a terminal.
+
+`cargo run --release --example frames` prints each screen as plain text,
+for checking layout without a terminal.
 
 ## License
 

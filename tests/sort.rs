@@ -13,6 +13,7 @@ fn row(pid: i32, name: &str, cpu: f32, rss: u64, cpu_time: u64) -> ProcRow {
         cpu,
         mem: 0.0,
         user: String::from("joseph"),
+        depth: 0,
     }
 }
 

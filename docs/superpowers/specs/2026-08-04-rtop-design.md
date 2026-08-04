@@ -332,10 +332,13 @@ figure can be re-measured whenever the sampler changes. Targets:
 - Under 1% of one core, averaged, at a 1500 ms refresh with 500 processes
 - Under 5 ms per frame render
 
-**Measured on 2026-08-04**, 782 processes, release build: **6.0 ms per
-sample, a 0.40% duty cycle** at the 1500 ms refresh. Within budget with
-room to spare. These are targets to measure against, not assertions that
-fail CI on a noisy machine.
+**Measured on 2026-08-04**, ~790 processes, release build: **7.7–8.4 ms per
+sample, a 0.51–0.56% duty cycle** at the 1500 ms refresh. Within budget.
+These are targets to measure against, not assertions that fail CI on a
+noisy machine.
+
+The budget did real work here: adding the sensors reader pushed the figure
+to 2.5% and the bench is what caught it. See *What phase 6 actually cost*.
 
 ## 8. Configuration
 
@@ -371,20 +374,40 @@ using.
 |---|---|---|
 | 1 | ✅ Sampler, `Sample`, deltas | Fixture tests pass; benches run. No UI exists. |
 | 2 | ✅ Header meters + `ProcessTable` + sort + scroll | **rtop is usable as a monitor.** |
-| 3 | Search, command line, help overlay, kill, renice | Full process interaction. |
-| 4 | Detail pane | Per-process drill-down. |
-| 5 | I/O tab | Disk and network throughput with sparklines. |
-| 6 | Sensors tab | Thermal, fan, battery. |
-| 7 | Config file and themes | Persistence and theming. |
+| 3 | ✅ Search, command line, help overlay, kill, renice | Full process interaction. |
+| 4 | ✅ Detail pane | Per-process drill-down. |
+| 5 | ✅ I/O tab | Disk and network throughput. |
+| 6 | ✅ Sensors tab | Thermal, fan, battery. |
+| 7 | ✅ Config file and themes | Persistence and theming. |
 
-### Risk flag: phase 6
+All seven phases are built. Tree view (`t`) arrived alongside phase 3.
 
-Sensors is the weakest phase and the first candidate to cut. `hwmon`
-discovery is genuinely inconsistent across hardware — label files that may
-or may not exist, per-driver naming conventions, units that vary by sensor
-type — and it is the least htop-like feature in the set. It is sequenced
-last so that cutting it costs nothing. Decide at the phase 5/6 boundary
-whether it earns its complexity.
+### What phase 6 actually cost
+
+The flagged risk was real, and showed up as performance rather than
+correctness. `hwmon` discovery is as inconsistent as expected — sparse
+indices (`temp1`, `temp2`, `temp6`, `temp10`), optional labels, threshold
+files that look exactly like readings — but that is all handled in a pure
+function against literal fixtures.
+
+The surprise was cost. This machine exposes **82 hwmon inputs, and reading
+them takes ~30ms** — several times the whole rest of a sample — because
+many are real I/O over SMBus rather than cached kernel values. Reading them
+every tick took rtop from a 0.4% duty cycle to **2.5%**, well over budget.
+
+Two changes bring it back:
+
+1. **Sensors are read only while their tab is showing.** The sampling loop
+   is keyed on the visible tab via `use_task`, so switching to the tab
+   restarts it and readings appear on the next tick.
+2. **They refresh at most every 2 seconds even then.** Temperatures do not
+   move faster than that.
+
+`Sample::sensors` is `Option<Vec<Sensor>>` rather than `Vec<Sensor>`
+precisely because of this: `None` means "not read", `Some(vec![])` means
+"this machine genuinely has none", and the view says something different
+about each. Conflating them made a tab that had not sampled yet claim the
+hardware did not exist.
 
 ## Dependencies
 

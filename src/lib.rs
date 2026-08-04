@@ -5,10 +5,14 @@
 //! `/proc` without knowing a terminal exists, and is tested against captured
 //! fixture text rather than the live system.
 
+pub mod actions;
+pub mod config;
 pub mod delta;
+pub mod filter;
 pub mod format;
 pub mod model;
 pub mod sample;
 pub mod sampler;
 pub mod sort;
+pub mod tree;
 pub mod ui;

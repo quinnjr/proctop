@@ -3,12 +3,17 @@
 use crate::model::ProcRow;
 
 /// A sortable column of the process table.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// The serde names are the ones written in the config file and accepted by
+/// `--sort`, so they are short rather than matching the variant spelling.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SortKey {
     Pid,
     Name,
     #[default]
     Cpu,
+    #[serde(rename = "mem")]
     Memory,
     /// Accumulated CPU time since the process started.
     Time,

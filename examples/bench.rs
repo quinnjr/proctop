@@ -19,13 +19,13 @@ fn main() {
 
     // The first sample has no previous reading to diff against and does not
     // represent steady-state cost.
-    let warmup = sampler.sample();
+    let warmup = sampler.sample(false);
     let processes = warmup.procs.len();
 
     let mut total = Duration::ZERO;
     for _ in 0..ITERATIONS {
         let started = Instant::now();
-        black_box(sampler.sample());
+        black_box(sampler.sample(false));
         total += started.elapsed();
     }
 

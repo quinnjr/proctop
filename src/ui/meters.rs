@@ -7,17 +7,27 @@ use ntui::{Component, Element, Hooks};
 use crate::delta::CpuUsage;
 use crate::format;
 use crate::model::Sample;
-use crate::ui::{Shared, theme};
+use crate::ui::Shared;
+use crate::ui::palette::Palette;
 
-/// Meters are laid out in columns of at most this many rows, so a 32-core
+/// Most rows of meters to show before adding another column, so a 32-core
 /// machine does not push the process table off the screen.
-const MAX_ROWS: usize = 8;
-/// Widest a meter column is allowed to get, including its label and figure.
+const MAX_ROWS: usize = 9;
+/// Width of one meter column, including its label and figure.
 const METER_WIDTH: u16 = 30;
+/// Cells between columns.
+const METER_GAP: u16 = 2;
+
+/// Memory and swap are laid out as two more meters after the cores, so they
+/// share the column budget instead of always claiming a column of their own.
+const EXTRA_METERS: usize = 2;
 
 #[derive(Clone, PartialEq, Default)]
 pub struct MetersProps {
     pub sample: Shared<Sample>,
+    pub palette: Palette,
+    /// Terminal width, which decides how many meter columns fit.
+    pub width: u16,
 }
 
 pub struct Meters;
@@ -27,35 +37,31 @@ impl Component for Meters {
 
     fn render(props: &MetersProps, _hooks: &mut Hooks) -> Element {
         let sample = &props.sample;
+        let palette = &props.palette;
         let cores = &sample.cores;
+
+        // Memory and swap are just two more meters on the end, so they
+        // flow into whatever column has room rather than always claiming
+        // one of their own.
+        let mut meters: Vec<Element> = cores
+            .iter()
+            .enumerate()
+            .map(|(i, usage)| cpu_meter(i, usage, palette))
+            .collect();
+        meters.push(meter("Mem", memory_bar(sample), palette.mem_used, palette));
+        meters.push(meter("Swp", swap_bar(sample), palette.swap, palette));
 
         // Fill each column top to bottom, the way htop does, so core 0 and
         // core 1 sit next to each other vertically rather than across the
         // screen from each other.
-        let rows = rows_per_column(cores.len());
+        let rows = rows_per_column(cores.len(), props.width);
         let mut columns: Vec<Vec<Element>> = Vec::new();
-        for (i, usage) in cores.iter().enumerate() {
+        for (i, meter) in meters.into_iter().enumerate() {
             let column = i / rows;
             if columns.len() <= column {
                 columns.push(Vec::new());
             }
-            columns[column].push(cpu_meter(i, usage));
-        }
-
-        // Memory and swap ride at the end of the last column when there is
-        // room, which is what keeps the header compact.
-        let mut memory_column = vec![
-            meter("Mem", memory_bar(sample), theme::MEM_USED),
-            meter("Swp", swap_bar(sample), theme::SWAP),
-        ];
-        if let Some(last) = columns.last_mut()
-            && last.len() + memory_column.len() <= rows
-        {
-            last.append(&mut memory_column);
-            memory_column = Vec::new();
-        }
-        if !memory_column.is_empty() {
-            columns.push(memory_column);
+            columns[column].push(meter);
         }
 
         let columns: Vec<Element> = columns
@@ -86,22 +92,27 @@ impl Component for Meters {
                     },
                     columns,
                 ),
-                summary(sample),
+                summary(sample, palette),
             ],
         )
     }
 }
 
-/// How many rows each meter column holds. Columns are added rather than rows
-/// once a machine has more cores than fit vertically.
-fn rows_per_column(cores: usize) -> usize {
-    if cores <= MAX_ROWS {
-        return cores.max(1);
-    }
-    cores.div_ceil(cores.div_ceil(MAX_ROWS))
+/// How many rows each meter column holds.
+///
+/// Columns are added rather than rows once a machine has more cores than fit
+/// vertically — but only as many columns as the terminal is actually wide
+/// enough for. Without that ceiling a 32-core machine lays out five columns
+/// and the last one, holding memory and swap, is clipped off the right edge.
+fn rows_per_column(cores: usize, width: u16) -> usize {
+    let items = cores + EXTRA_METERS;
+    let fits = ((width + METER_GAP) / (METER_WIDTH + METER_GAP)).max(1) as usize;
+    let wanted = items.div_ceil(MAX_ROWS).max(1);
+    let columns = wanted.min(fits);
+    items.div_ceil(columns).max(1)
 }
 
-fn cpu_meter(index: usize, usage: &CpuUsage) -> Element {
+fn cpu_meter(index: usize, usage: &CpuUsage, palette: &Palette) -> Element {
     meter(
         &index.to_string(),
         format!(
@@ -109,32 +120,35 @@ fn cpu_meter(index: usize, usage: &CpuUsage) -> Element {
             format::bar(usage.busy(), 16),
             usage.busy() * 100.0
         ),
-        segment_color(usage),
+        segment_color(usage, palette),
+        palette,
     )
 }
 
 /// Color the bar by whatever it is mostly doing, so a machine pinned in
 /// system time is distinguishable from one doing user work at a glance.
-fn segment_color(usage: &CpuUsage) -> Color {
+fn segment_color(usage: &CpuUsage, palette: &Palette) -> Color {
     let candidates = [
-        (usage.system, theme::SYSTEM),
-        (usage.nice, theme::NICE),
-        (usage.irq + usage.softirq, theme::IRQ),
-        (usage.iowait, theme::IOWAIT),
-        (usage.user, theme::USER),
+        (usage.system, palette.cpu_system),
+        (usage.nice, palette.cpu_nice),
+        (usage.irq + usage.softirq, palette.cpu_irq),
+        (usage.iowait, palette.cpu_iowait),
+        (usage.user, palette.cpu_user),
     ];
     candidates
         .iter()
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, color)| *color)
-        .unwrap_or(theme::USER)
+        .unwrap_or(palette.cpu_user)
 }
 
 fn memory_bar(sample: &Sample) -> String {
     let mem = &sample.mem;
     let used = fraction(mem.used(), mem.total);
+    // Kept within METER_WIDTH: content wider than the column makes
+    // flexbox shrink the label box beside it, and the label loses a cell.
     format!(
-        "{}{:>9}/{}",
+        "{}{:>5}/{}",
         format::bar(used, 16),
         format::bytes(mem.used()),
         format::bytes(mem.total)
@@ -145,7 +159,7 @@ fn swap_bar(sample: &Sample) -> String {
     let mem = &sample.mem;
     let used = fraction(mem.swap_used(), mem.swap_total);
     format!(
-        "{}{:>9}/{}",
+        "{}{:>5}/{}",
         format::bar(used, 16),
         format::bytes(mem.swap_used()),
         format::bytes(mem.swap_total)
@@ -162,7 +176,7 @@ fn fraction(part: u64, whole: u64) -> f32 {
     }
 }
 
-fn meter(label: &str, content: String, color: Color) -> Element {
+fn meter(label: &str, content: String, color: Color, palette: &Palette) -> Element {
     Element::view(
         ViewProps {
             flex_direction: FlexDirection::Row,
@@ -177,7 +191,7 @@ fn meter(label: &str, content: String, color: Color) -> Element {
                 },
                 vec![Element::text(TextProps {
                     content: format!("{label:>3}"),
-                    color: theme::LABEL,
+                    color: palette.label,
                     weight: Weight::Bold,
                     wrap: TextWrap::Truncate,
                     ..Default::default()
@@ -193,7 +207,7 @@ fn meter(label: &str, content: String, color: Color) -> Element {
     )
 }
 
-fn summary(sample: &Sample) -> Element {
+fn summary(sample: &Sample, palette: &Palette) -> Element {
     let load = &sample.load;
     Element::view(
         ViewProps {
@@ -210,19 +224,19 @@ fn summary(sample: &Sample) -> Element {
                     sample.threads,
                     sample.running
                 ),
-                color: theme::TEXT,
+                color: palette.text,
                 wrap: TextWrap::Truncate,
                 ..Default::default()
             }),
             Element::text(TextProps {
                 content: format!("Load: {:.2} {:.2} {:.2}", load.one, load.five, load.fifteen),
-                color: theme::TEXT,
+                color: palette.text,
                 wrap: TextWrap::Truncate,
                 ..Default::default()
             }),
             Element::text(TextProps {
                 content: format!("Uptime: {}", format::uptime(sample.uptime)),
-                color: theme::MUTED,
+                color: palette.muted,
                 wrap: TextWrap::Truncate,
                 ..Default::default()
             }),
@@ -230,18 +244,12 @@ fn summary(sample: &Sample) -> Element {
     )
 }
 
-/// How many terminal rows the header occupies, so the table knows how much
-/// room is left.
-pub fn height(cores: usize) -> u16 {
-    let rows = rows_per_column(cores);
-    let columns = cores.div_ceil(rows).max(1);
-    let last_column_used = cores - rows * (columns - 1);
-    // Memory and swap either tuck into the last column or add a column of
-    // their own; either way the header is as tall as its tallest column.
-    let meter_rows = if last_column_used + 2 <= rows {
-        rows
-    } else {
-        rows.max(2)
-    };
-    (meter_rows + 1) as u16
+/// How many terminal rows the header occupies, so the body knows how much
+/// room is left. The `+ 1` is the summary line beneath the meters.
+pub fn height(cores: usize, width: u16) -> u16 {
+    let rows = rows_per_column(cores, width);
+    // The tallest column is the full row count unless everything fits in
+    // one short column.
+    let items = cores + EXTRA_METERS;
+    (rows.min(items) + 1) as u16
 }

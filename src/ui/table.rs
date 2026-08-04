@@ -7,15 +7,16 @@
 //! the visible window *before* constructing any row, keeping the cost of a
 //! frame proportional to what is on screen rather than to the process count.
 
-use ntui::props::{Dimension, FlexDirection, TextProps, TextWrap, ViewProps};
+use ntui::props::{Dimension, FlexDirection, Overflow, TextProps, TextWrap, ViewProps};
 use ntui::style::{Color, Weight};
 use ntui::{Component, Element, Hooks};
 
 use crate::format;
 use crate::model::ProcRow;
 use crate::sort::SortKey;
+use crate::ui::Shared;
+use crate::ui::palette::Palette;
 use crate::ui::selection::Selection;
-use crate::ui::{Shared, theme};
 
 /// A fixed-width column of the table.
 struct Column {
@@ -89,19 +90,24 @@ const COLUMNS: [Column; 10] = [
     },
 ];
 
-/// The name column is not in `COLUMNS` because it takes the remaining width
-/// rather than a fixed one.
+/// The command column is not in `COLUMNS` because it takes the remaining
+/// width rather than a fixed one.
 const COMMAND_HEADER: &str = "Command";
+
+/// Cells of indent per tree level. Two reads as nesting without pushing long
+/// command lines off the right edge.
+const INDENT: usize = 2;
 
 #[derive(Clone, PartialEq, Default)]
 pub struct ProcessTableProps {
-    /// Already sorted and filtered.
+    /// Already filtered, sorted, and (in tree view) nested.
     pub rows: Shared<Vec<ProcRow>>,
     pub selection: Selection,
     /// How many rows fit on screen.
     pub height: u16,
     /// Which column is driving the order, so its header can be marked.
     pub sort: SortKey,
+    pub palette: Palette,
 }
 
 pub struct ProcessTable;
@@ -128,11 +134,11 @@ impl ProcessTable {
             .visible(props.rows.len(), props.height as usize);
 
         let mut children = Vec::with_capacity(window.len() + 1);
-        children.push(header_row(props.sort));
+        children.push(header_row(props.sort, &props.palette));
 
         for i in window {
             let row = &props.rows[i];
-            children.push(process_row(row, i == props.selection.index));
+            children.push(process_row(row, i == props.selection.index, &props.palette));
         }
 
         Element::view(
@@ -146,7 +152,7 @@ impl ProcessTable {
     }
 }
 
-fn header_row(sort: SortKey) -> Element {
+fn header_row(sort: SortKey, palette: &Palette) -> Element {
     let mut cells = Vec::with_capacity(COLUMNS.len() + 1);
 
     for column in &COLUMNS {
@@ -154,20 +160,24 @@ fn header_row(sort: SortKey) -> Element {
         cells.push(cell(
             &pad(column.header, column.width, column.numeric),
             column.width,
-            if active { Color::Black } else { theme::HEADER },
+            if active {
+                palette.selected_fg
+            } else {
+                palette.header_fg
+            },
             if active { Weight::Bold } else { Weight::Normal },
             if active {
-                Color::Cyan
+                palette.selected_bg
             } else {
-                theme::HEADER_BG
+                palette.header_bg
             },
         ));
     }
     cells.push(cell_flex(
         COMMAND_HEADER,
-        theme::HEADER,
+        palette.header_fg,
         Weight::Normal,
-        theme::HEADER_BG,
+        palette.header_bg,
     ));
 
     Element::view(
@@ -175,41 +185,41 @@ fn header_row(sort: SortKey) -> Element {
             flex_direction: FlexDirection::Row,
             gap: 1,
             height: Dimension::Cells(1),
-            background: theme::HEADER_BG,
+            background: palette.header_bg,
             ..Default::default()
         },
         cells,
     )
 }
 
-fn process_row(row: &ProcRow, selected: bool) -> Element {
+fn process_row(row: &ProcRow, selected: bool, palette: &Palette) -> Element {
     let p = &row.proc;
     let bg = if selected {
-        theme::SELECTED_BG
+        palette.selected_bg
     } else {
         Color::Reset
     };
-    // On the selection bar, per-column colors would be unreadable against
-    // the highlight, so the whole row takes the contrasting foreground.
-    let fg = |c: Color| if selected { theme::SELECTED_FG } else { c };
+    // Against the selection bar, per-column colors would be unreadable, so
+    // the whole row takes the contrasting foreground.
+    let fg = |c: Color| if selected { palette.selected_fg } else { c };
 
     let values = [
-        (p.pid.to_string(), fg(theme::TEXT)),
-        (row.user.clone(), fg(theme::LABEL)),
-        (p.priority.to_string(), fg(theme::TEXT)),
-        (p.nice.to_string(), fg(theme::TEXT)),
-        (format::bytes(p.vsize), fg(theme::MUTED)),
-        (format::bytes(p.rss), fg(theme::TEXT)),
-        (p.state.as_char().to_string(), fg(theme::TEXT)),
+        (p.pid.to_string(), fg(palette.text)),
+        (row.user.clone(), fg(palette.label)),
+        (p.priority.to_string(), fg(palette.text)),
+        (p.nice.to_string(), fg(palette.text)),
+        (format::bytes(p.vsize), fg(palette.muted)),
+        (format::bytes(p.rss), fg(palette.text)),
+        (p.state.as_char().to_string(), fg(palette.text)),
         (
             format!("{:.1}", row.cpu * 100.0),
-            fg(theme::cpu_color(row.cpu)),
+            fg(palette.cpu_load(row.cpu)),
         ),
         (
             format!("{:.1}", row.mem * 100.0),
-            fg(theme::mem_color(row.mem)),
+            fg(palette.mem_load(row.mem)),
         ),
-        (format::cpu_time(p.cpu_time()), fg(theme::TEXT)),
+        (format::cpu_time(p.cpu_time()), fg(palette.text)),
     ];
 
     let mut cells: Vec<Element> = values
@@ -225,7 +235,13 @@ fn process_row(row: &ProcRow, selected: bool) -> Element {
             )
         })
         .collect();
-    cells.push(cell_flex(&p.name, fg(theme::TEXT), Weight::Normal, bg));
+
+    cells.push(cell_flex(
+        &indented(row),
+        fg(palette.text),
+        Weight::Normal,
+        bg,
+    ));
 
     Element::view(
         ViewProps {
@@ -239,10 +255,22 @@ fn process_row(row: &ProcRow, selected: bool) -> Element {
     )
 }
 
+/// The command, prefixed with tree guides at depth.
+fn indented(row: &ProcRow) -> String {
+    if row.depth == 0 {
+        return row.proc.name.clone();
+    }
+    format!(
+        "{}└─ {}",
+        " ".repeat((row.depth - 1) * INDENT),
+        row.proc.name
+    )
+}
+
 /// Pad or truncate to exactly `width`, so columns line up regardless of
 /// content. Truncation is on the left for numbers (keeping the significant
 /// digits) and on the right for text.
-fn pad(value: &str, width: u16, numeric: bool) -> String {
+pub fn pad(value: &str, width: u16, numeric: bool) -> String {
     let width = width as usize;
     let len = value.chars().count();
 
@@ -261,7 +289,8 @@ fn pad(value: &str, width: u16, numeric: bool) -> String {
     }
 }
 
-fn cell(content: &str, width: u16, color: Color, weight: Weight, background: Color) -> Element {
+/// One fixed-width cell.
+pub fn cell(content: &str, width: u16, color: Color, weight: Weight, background: Color) -> Element {
     Element::view(
         ViewProps {
             width: Dimension::Cells(width),
@@ -279,15 +308,15 @@ fn cell(content: &str, width: u16, color: Color, weight: Weight, background: Col
     )
 }
 
-/// The trailing column, which takes whatever width is left. Truncated rather
-/// than wrapped: a long command name must not push every later row down.
-fn cell_flex(content: &str, color: Color, weight: Weight, background: Color) -> Element {
+/// A cell taking whatever width is left. Truncated rather than wrapped: a
+/// long command name must not push every later row down.
+pub fn cell_flex(content: &str, color: Color, weight: Weight, background: Color) -> Element {
     Element::view(
         ViewProps {
             flex_grow: 1.0,
             height: Dimension::Cells(1),
             background,
-            overflow: ntui::props::Overflow::Clip,
+            overflow: Overflow::Clip,
             ..Default::default()
         },
         vec![Element::text(TextProps {
